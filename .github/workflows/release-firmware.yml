@@ -1,0 +1,64 @@
+name: Build firmware release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version without the v prefix"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: "micropy-system/requirements.txt"
+      - name: Install build toolchain
+        run: python -m pip install --requirement "micropy-system/requirements.txt"
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VERSION="${MANUAL_VERSION#v}"
+            TAG="v${VERSION}"
+          fi
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+      - name: Assemble device tree
+        run: python tools/assemble.py
+      - name: Build firmware
+        run: >-
+          python "micropy-system/local_builder.py"
+          --source-dir device
+          --output-dir build
+          --model pico2-w-rp2350
+          --version "${{ steps.version.outputs.version }}"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            build/pico2-w-rp2350-firmware.tar.zlib \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Firmware ${{ steps.version.outputs.tag }}" \
+            --generate-notes
