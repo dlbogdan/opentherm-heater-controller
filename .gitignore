@@ -3,5 +3,12 @@ __pycache__/
 *.pyc
 .venv/
 
-# Generated plots
-heat_curve.png
+# macOS
+.DS_Store
+
+.vscode/
+.micropico
+device/
+build/
+release/
+system-config.json

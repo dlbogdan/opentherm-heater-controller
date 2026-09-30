@@ -15,8 +15,9 @@
 1. **Replicate the blueprint** — heat curve + solar accumulator + optional demand P-term + dual hysteresis + rate limiting, with identical defaults and behavior.
 2. **Transport-agnostic control core** — the controller never knows whether it is talking to an OTGW or directly to a boiler. Boiler I/O is isolated behind a `BoilerTransport` interface.
 3. **OTGW-first** — the first working transport reuses the existing OTGW + thermostat topology (lowest risk). Direct OpenTherm-master is a later, additive transport.
-4. **Standalone** — the device must run with Wi-Fi off. Wi-Fi/MQTT is optional telemetry only.
-5. **Safe failsafes** — sensor timeout, frost protection, and a well-defined communication-failure policy.
+4. **Standalone control** — the control core must run with Wi-Fi off. Sensor data may come from the Homematic CCU3 on the LAN (proven source, preferred when present — §3.4) or from local sensors (DS18B20/BH1750); if no source is available, the failsafe flow applies (§9). Wi-Fi additionally carries the optional Home Assistant integration (§12).
+5. **Reuse what is proven** — the OTGW command handling (§2.3), the CCU3 JSON-RPC weather fetch (§3.4), and the HA MQTT entity shape (§12) all have working implementations in the previous `OT-PID-UI-PICO` project. Reuse their proven protocol behavior; modernize memory/performance/readability where they are weak.
+6. **Safe failsafes** — sensor timeout, frost protection, and a well-defined communication-failure policy.
 
 ---
 
@@ -100,20 +101,52 @@ failsafe behavior and the display; it never inspects transport internals.
 - **`set_heating(True)`** → ensure the override is active.
 - **`set_heating(False)`** → **release the override** so the original
   thermostat resumes. Do **not** rely on simply stopping the refresh.
-  - *Fallback:* if the OTGW build does not expose an explicit
-    "release override" command, `release_override()` is a **no-op** and the
-    original thermostat resumes naturally once the override expires (the
-    OTGW clears a stale control-setpoint override when the thermostat next
-    writes its own setpoint). The `set_flow_target(off_sentinel)` write in
-    §7.7 still happens, which is what the
+  - **Verified release sequence** (working implementation in the previous
+    project, `relinquish_control()` in
+    `OT-PID-UI-PICO/lib/controllers/controller_otgw.py`): send `CS=0`,
+    then `CH=0`. The `set_flow_target(off_sentinel)` write in
+    §7.7 still happens — that is what the
     [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:7) `> 20`
-    check keys on. Confirm the exact command set before relying on an
-    explicit release (see §13 open items).
+    check keys on — and both mechanisms coexist.
 - **`tick(now)`** → every **30 s**, if `heating_on` and the last submitted
   target is above the off sentinel, **re-send** the control setpoint. This is
   the behavior of [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:3).
+  (The previous implementation used a 50 s interval; 30 s is a tighter
+  margin against the same OTGW volatility requirement.)
 - **Reconnect:** on command failure, retry with backoff; report `DEGRADED`/`FAULT`.
 - **Ack handling:** a command is only "sent" once the OTGW acknowledges it.
+  The gateway echoes `<CMD>: <response>` on its own line (e.g. `CS: 55.0`);
+  no echo within the timeout = failure. The previous implementation did
+  exactly this: one response event per command code, 2–5 s timeout,
+  `\r`-terminated commands over a UART stream reader/writer.
+
+**Verified OTGW command set** (from the working previous implementation,
+`OT-PID-UI-PICO/lib/controllers/controller_otgw.py` — this resolves the
+former open item about override release):
+
+| Command | Meaning |
+|---|---|
+| `CS=<temp>` | Set the control setpoint — the thermostat override |
+| `CS=0` | **Release the override** — the original thermostat resumes |
+| `CH=1` / `CH=0` | Set / clear CH enable (Master Status bit 0) |
+| `PM=<id>` | Request a priority message (e.g. `PM=5` for fault details) |
+
+**Passive telemetry** — the gateway continuously emits `T<8-hex>` /
+`B<8-hex>` status lines (DataID + HB/LB bytes); parse them instead of
+actively polling:
+
+- ID 25 (f8.8) boiler water temperature → `read_flow_temp()`
+- ID 28 (f8.8) return water temperature → `read_return_temp()`
+- ID 17 (f8.8) relative modulation level → `read_modulation()`
+- ID 0 status flags — master HB: CH/DHW enable; slave LB: fault, flame
+- ID 5 fault flags (LB) + OEM code (HB); on a slave fault-state change
+  send `PM=5` to pull the detailed fault data
+- f8.8 decode: `(hb << 8) | lb`, sign-extend on `hb & 0x80`, divide by 256
+
+**Health signals** (all observed in the working implementation):
+boiler connected iff any `B` line arrived within 60 s; thermostat
+connected/disconnected via gateway log lines; gateway version from the boot
+banner. These map directly onto `health()` and the status display.
 
 ### 2.4 Direct OpenTherm transport (later, additive)
 
@@ -191,6 +224,9 @@ solar accumulator, change `last_sent_flow`, or alter controller state.
 
 - **Outdoor temp:** DS18B20 (1-Wire, GPIO 12). Optional second DS18B20 for
   room temp (GPIO 13) to provide a demand signal (Option B, §7.3).
+  **Both outdoor temp and lux can instead be served by the Homematic CCU3
+  weather station over the LAN (§3.4)** — in that configuration the wired
+  sensors are optional fallbacks, not requirements.
 - **Lux:** BH1750 (I2C1, max 65 535 lx — sufficient for the 10 k–40 k lx
   thresholds). Use TSL2591 if `lux_high` may exceed 65 535 lx.
 - **Display:** **256×64 SPI panel** — SSD1322 or ST7567 (both SPI-only, both
@@ -199,6 +235,77 @@ solar accumulator, change `last_sent_flow`, or alter controller state.
   - **Do not** wire the OLED on I2C — SSD1322/ST7567 are SPI-only.
   - If a 128×64 panel is preferred instead, use SSD1306/SH1106 on I2C1 and
     adjust the display layout in §11.
+
+### 3.4 Remote sensor source (Homematic CCU3)
+
+The Homematic IP CCU3 on the LAN exposes a JSON-RPC-over-HTTP API
+(`POST /api/`) through which an HmIP-SWO weather station reports
+`ACTUAL_TEMPERATURE`, `WIND_SPEED`, and `ILLUMINATION` — a single source
+for **both** `t_out` and `lux`, eliminating the need for the wired
+DS18B20/BH1750. This integration is proven: it ran reliably on the Pico W
+in the previous `OT-PID-UI-PICO` project
+(`lib/services/service_async_http.py` + `lib/services/service_homematic_rpc.py`).
+We reuse the proven protocol behavior and drop what this device does not
+need (valve polling, room lookups, statistics).
+
+**Protocol (proven to work):**
+
+- Plain **HTTP/1.0** POST, one request per connection, no TLS. TLS is
+  deliberately skipped: the MicroPython TLS stack is heavy and the CCU3
+  sits on a trusted LAN. (If the CCU3 ever moves off the LAN, revisit —
+  see §14 open items.)
+- **Auth:** `Session.login` with `{username, password}` returns a session
+  id; every subsequent call carries `_session_id_` in `params`. On a
+  session-expiry error (message contains "session" / "not logged in" /
+  "access denied", or code −1), re-login once and retry the failed call.
+- **Discovery (one-time):** `Device.listAll` → `Device.get {id}` per
+  candidate → first device whose `type` contains the configured substring
+  (default `HmIP-SWO`) → store `{interface, address}`.
+- **Poll (every 60 s):** `Interface.getValue` with
+  `{interface, address: "<addr>:1", valueKey}` for
+  `ACTUAL_TEMPERATURE` (→ `t_out`) and `ILLUMINATION` (→ `lux`);
+  `WIND_SPEED` optional, display-only.
+
+**Deliberate simplifications vs. the old implementation (memory/perf):**
+
+| Old implementation | This device |
+|---|---|
+| Room name lookup: O(devices × rooms) RPC calls | **Skipped entirely** — no room names needed |
+| Valve discovery + per-valve `LEVEL` polling | **Skipped** — weather values only |
+| `body += chunk` (O(n²) string reallocation) | Append chunks to a list, `b"".join` once |
+| 3 retries, then full rediscovery on any error | 2 retries with 0.5 s · 2ⁿ backoff; discovery only on cache miss |
+| All stats state (avg/max/active valves) | None — just `t_out`, `lux`, optional wind, freshness ts |
+
+**Flash cache:** `ccu3_cache.json` holding
+`{interface, address, discovered_at}` — written once at discovery, read at
+boot. The device list rarely changes; never re-discover on a schedule.
+
+**Cost:** one weather poll ≈ 2–3 small RPC calls per 60 s (low single-digit
+KB of traffic per minute) — negligible for the CCU3. The HTTP client,
+uasyncio streams, and session state add only a few KB of RAM (see §13).
+
+### 3.5 Sensor source policy
+
+Step 1 of the pipeline ("read sensors") reads `t_out` and `lux` from a
+**source chain**, not a single device:
+
+```
+t_out:  CCU3 (if fresh) → local DS18B20 (if wired) → none
+lux:    CCU3 (if fresh) → local BH1750 (if wired)  → none (treat as 0)
+```
+
+- **"Fresh" = value received within 2 × poll interval** (default 120 s).
+  Stale values are dropped, never used.
+- Config keys `t_out_source` / `lux_source` (`"ccu3"`, `"local"`,
+  `"auto"`, default `"auto"`) pin or order the sources.
+- If **no** source yields fresh `t_out` for 10 min → failsafe flow (§9).
+  The 10-min window now spans the whole chain, not a single wire.
+- If **no** source yields fresh `lux`, treat `lux = 0` (no solar offset) —
+  same behavior as before (§9).
+- **BOM consequence:** with the CCU3 as primary source, the DS18B20 and
+  BH1750 are *optional* — a device with no wired sensors still works fully
+  while the CCU3 is reachable. The local sensors remain supported for true
+  offline operation and as the offline fallback.
 
 ---
 
@@ -209,6 +316,7 @@ main.py
 ├── config.py            ← params dict + JSON load/save + validation (§6)
 ├── state.py             ← solar_accum, heating_on, last_sent_flow, timestamps
 ├── sensors/
+│   ├── source.py        ← t_out/lux source chain: CCU3 → local → none (§3.5)
 │   ├── ds18b20.py       ← outdoor temp (+ optional room temp for Option B)
 │   └── bh1750.py        ← lux
 ├── control/
@@ -228,7 +336,9 @@ main.py
 │   ├── screens.py       ← status / config / failsafe screens
 │   └── buttons.py       ← debounce + nav
 ├── net/
-│   └── mqtt.py          ← optional: publish state, receive demand
+│   ├── http.py          ← minimal async HTTP/1.0 client (proven pattern)
+│   ├── ccu3.py          ← CCU3 JSON-RPC: login, discovery, weather poll (§3.4)
+│   └── mqtt.py          ← HA entity: publish state, receive override (§12)
 └── scheduler.py         ← main loop with WDT
 ```
 
@@ -244,8 +354,8 @@ The scheduler shape is identical in both transport modes — it calls
 while True:
     now = time.ticks_ms()
     transport.tick(now)          # OTGW: 30 s refresh / Direct OT: ~900 ms heartbeat
-    sensors.poll(now)            # read temp/lux every 10 s
-    controller.tick(now)         # recompute every 60 s
+    sensors.poll(now)            # local temp/lux every 10 s (if wired)
+    controller.tick(now)         # recompute every 60 s (reads latest source values)
     ui.tick(now)                 # redraw display ~10 fps
     net.tick(now)                # MQTT keepalive + publish (optional)
     persist.tick(now)            # flash write — on state change only (§10)
@@ -253,10 +363,17 @@ while True:
     time.sleep_ms(50)            # ~20 Hz main loop
 ```
 
+The CCU3 weather poll (§3.4) runs as a **background uasyncio task** every
+60 s — the same pattern the previous project used successfully — and
+publishes its values into the sensor source chain; `sensors.poll` and
+`controller.tick` only ever read the latest cached values, so the 2–3 s
+HTTP round-trip never blocks the control pipeline.
+
 | Task | Interval | Notes |
 |---|---|---|
 | `transport.tick` | OTGW 30 s / Direct OT ~900 ms | **Highest** — must not be blocked |
-| Sensor read | 10 s | DS18B20 + BH1750 |
+| Sensor read | 10 s | DS18B20 + BH1750 (if wired) |
+| CCU3 weather poll | 60 s | Background task; t_out + lux (§3.4) |
 | Control tick | 60 s | Full pipeline (§7) |
 | Display update | 100 ms (~10 fps) | OLED refresh |
 | MQTT publish | 30 s | Optional telemetry |
@@ -288,8 +405,30 @@ DEFAULTS = {
     # Transport
     "transport": "otgw",          # "otgw" | "direct_ot"
     "off_sentinel": 20.0,         # °C value that means "off" (matches blueprint)
+    # Sensor sources (§3.5)
+    "t_out_source": "auto",       # "ccu3" | "local" | "auto"
+    "lux_source": "auto",
+    # Homematic CCU3 (§3.4)
+    "ccu3_url": "http://192.168.1.50/api/",
+    "ccu3_user": "",
+    "ccu3_pass": "",
+    "ccu3_weather_type": "HmIP-SWO",
+    "ccu3_poll_s": 60,
+    # Home Assistant (§12)
+    "mqtt_enabled": False,
+    "mqtt_broker": "192.168.1.10",
+    "mqtt_user": "",
+    "mqtt_pass": "",
+    "mqtt_base_topic": "otc/boiler",
 }
 ```
+
+> **Provisioning split:** the ~20 control parameters stay button-UI editable.
+> The network block (CCU3 URL/credentials, MQTT broker/credentials) is
+> provisioned **once** — by editing `config.json` over USB/serial, or a
+> minimal setup flow — not through the 5-button UI (typing URLs and
+> passwords with up/down buttons is not a viable UX). Credentials live in
+> flash like everything else; treat the device like any other LAN appliance.
 
 ### Validation (on config load)
 
@@ -302,6 +441,7 @@ assert lux_low < lux_high,     "lux_low must be < lux_high"
 assert flow_min < flow_max,    "flow_min must be < flow_max"
 assert t_design < t_on,        "t_design must be < t_on"
 assert curve_base <= flow_design, "curve_base must be <= flow_design"
+assert ccu3_poll_s >= 30,      "polling the CCU3 faster than every 30 s is pointless"
 ```
 
 ---
@@ -319,7 +459,7 @@ Runs every 60 s. Steps 1–8 in sequence. All variable names match §6 keys.
 > changes.
 
 ```
-1. Read sensors → t_out, lux, demand_raw
+1. Read sensor sources (§3.5) → t_out, lux, demand_raw
 2. Compute base_flow from heat curve
 3. Update solar accumulator → solar_offset   (dt capped at 30 min)
 4. Compute demand P-offset + demand gate
@@ -494,7 +634,8 @@ change `last_sent_flow`, the accumulator, or controller state.
 
 On HEATING → OFF in OTGW mode, the transport must **explicitly release** the
 control-setpoint override so the original thermostat resumes control. Do not
-rely on simply stopping the 30 s refresh.
+rely on simply stopping the 30 s refresh. Verified sequence (§2.3):
+`CS=0` then `CH=0`.
 
 ---
 
@@ -502,9 +643,10 @@ rely on simply stopping the 30 s refresh.
 
 | Condition | Action |
 |---|---|
-| No outdoor temp for 10 min | Fixed failsafe flow (e.g. 45 °C). Log warning. |
-| No lux for 10 min | Assume lux = 0 (no solar offset). Continue. |
-| Both sensors failed | Failsafe flow (45 °C). Log error. |
+| No **fresh** `t_out` from any source in the chain (§3.5) for 10 min | Fixed failsafe flow (e.g. 45 °C). Log warning. |
+| CCU3 unreachable (Wi-Fi up, CCU3 down) | Fall back to the local sensor if wired; else the row above. Log which source failed. |
+| Wi-Fi down | Same as above — local sensor covers it; a device with no wired sensor fails to the failsafe flow after 10 min. |
+| No fresh `lux` from any source | Assume lux = 0 (no solar offset). Continue. |
 | `t_out < -5 °C` | Raise the **sent** flow floor to 35 °C (frost protection — see note below). |
 | Transport `FAULT` | See §9.1. |
 | Firmware hang | Hardware WDT (8 s) resets; state restored from flash (§10). |
@@ -622,7 +764,54 @@ nothing else needs to survive a power cycle.
 
 ---
 
-## 12. Memory Budget (RP2350, 520 KB SRAM)
+## 12. Home Assistant MQTT Entity
+
+Wi-Fi also exposes the controller to Home Assistant. The shape is proven in
+the previous project's `lib/services/boilerhaentity.py` — a working mock HA
+**water_heater** plus a **manual-override switch**, built on `umqtt.simple`
+with retained discovery and an availability topic. The real entity keeps the
+same discovery payload structure, topics, retain conventions, and umqtt
+pump pattern; the state is simply sourced from the live controller instead
+of a simulation.
+
+**Entity model (water_heater, as in the working mock):**
+
+| HA concept | Source | Topic (base = `otc/boiler`) |
+|---|---|---|
+| `mode` | `off` / `heat` (hysteresis state) | `otc/boiler/mode` ← `otc/boiler/mode/set` |
+| `target_temperature` | controller's last target flow | `…/target_temperature/state` ← `…/target_temperature/set` |
+| `current_temperature` | boiler flow temp (OTGW ID 25 or local) | `…/current_temperature` |
+| `min/max_temp`, `temp_step` | `flow_min` / `flow_max`, step 0.5 | discovery payload |
+| availability | LWT, retained `online`/`offline` | `otc/boiler/status` |
+| manual-override switch | `manual_override` state | `…/override/state` ← `…/override/set` |
+
+Plus additional **sensor** entities for dashboards: outdoor temp, lux,
+solar accumulator (°C of offset), and the failsafe state.
+
+**Semantics:**
+
+- `mode/set` `off`|`heat` → manual override of the hysteresis state: the
+  auto ON/OFF decisions are suspended until the override is cleared (same
+  idea as the mock's `manual_override`, which suppressed the simulated
+  temperature drift).
+- `target_temperature/set` → manual override of the target flow, bypassing
+  the heat curve; the rate limiter and transport behave exactly as in the
+  automatic path. A subsequent `mode/set` clears the manual target.
+- Discovery is published with `retain=True` on
+  `homeassistant/water_heater/<device_id>/boiler/config`; the payload shape
+  is identical to the working mock (adjust `model` to the real firmware
+  version, drop the `Pico-Test BoilerSim` branding).
+- `umqtt.simple` `check_msg()` is pumped in the 20 Hz main loop (the mock's
+  pattern), reconnect with backoff; when Wi-Fi is off, this whole section
+  is simply inactive (§1 goal 4).
+- **Optional compatibility:** the mock also exposed `away_mode` (ON/OFF)
+  and a three-mode list (`off`/`eco`/`heat`). Keep those keys only if
+  existing HA dashboards depend on them; otherwise ship the simpler
+  two-mode model above.
+
+---
+
+## 13. Memory Budget (RP2350, 520 KB SRAM)
 
 | Component | Est. RAM |
 |---|---|
@@ -631,19 +820,23 @@ nothing else needs to survive a power cycle.
 | Config dict | <1 KB |
 | Sensor buffers | <1 KB |
 | Transport buffers (OTGW or OT) | <1 KB |
-| Wi-Fi (CYW43439) + MQTT stack | ~70 KB |
-| **Total** | **~155 KB** |
+| Wi-Fi (CYW43439) + MQTT + async HTTP (CCU3) stack | ~80 KB |
+| CCU3 session/cache + HA entity state | <2 KB |
+| **Total** | **~165 KB** |
 
-> The Wi-Fi/MQTT figure is the dominant term and is the least certain —
+> The Wi-Fi/network figure is the dominant term and is the least certain —
 > MicroPython's `network` + `umqtt` stack on the Pico 2W typically lands in
-> the 60–80 KB range depending on firmware build. The total is still well
-> under the RP2350's 520 KB SRAM, so there is comfortable headroom. If Wi-Fi
-> is disabled (plain Pico 2), subtract the ~70 KB line and the total drops
-> to ~85 KB.
+> the 60–80 KB range depending on firmware build. Crucially, this budget is
+> **proven, not speculative**: the previous `OT-PID-UI-PICO` project ran
+> exactly this stack — uasyncio streams, `umqtt.simple`, and an async
+> HTTP JSON-RPC client — on the Pico W. The total is still well under the
+> RP2350's 520 KB SRAM, so there is comfortable headroom. If Wi-Fi is
+> disabled (plain Pico 2), subtract the ~80 KB network lines and the total
+> drops to ~85 KB.
 
 ---
 
-## 13. Notes & Open Items
+## 14. Notes & Open Items
 
 - **Transport-agnostic core** — the controller is written once; OTGW is the
   first transport, direct OpenTherm-master is additive. The `BoilerTransport`
@@ -652,13 +845,29 @@ nothing else needs to survive a power cycle.
   risk). The 30 s override refresh from
   [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:3) is reproduced
   by the OTGW transport, not the controller.
-- **Wi-Fi/MQTT optional** — the device works fully standalone with Wi-Fi off.
-- **Minimal flash writes** — persist only `heating_on` (on state change) and
-  `config` (on user edit). No periodic timer. See §10 for the wear math.
+- **Reuses proven code** — OTGW command handling, CCU3 JSON-RPC weather
+  fetch, and the HA MQTT entity all have working implementations in the
+  previous `OT-PID-UI-PICO` project; this design adopts their protocol
+  behavior and drops the parts that do not apply.
+- **Wi-Fi optional for control** — the control loop runs with Wi-Fi off;
+  sensor data then comes from the wired sensors (or the failsafe flow).
+  HA integration is a convenience layer, never a dependency.
+- **Minimal flash writes** — persist only `heating_on` (on state change),
+  `config` (on user edit), and the one-time CCU3 device cache (§3.4). No
+  periodic timer. See §10 for the wear math.
 - **Fonts** — `framebuf.FrameBuffer` + Peter Hinch's `writer.py`.
 - **Open items:**
-  - Confirm the exact OTGW command set for control-setpoint + override release
-    (and whether the OTGW exposes a "release override" command).
+  - ~~Confirm the exact OTGW command set for control-setpoint + override
+    release~~ — **Resolved** from the working previous implementation:
+    `CS=<v>` sets the override, `CS=0` + `CH=0` releases it; ack is the
+    `<CMD>: <value>` echo (§2.3).
   - Confirm the Viessmann boiler's DHW/fault behavior when the Pico is the
     master (direct mode) before removing the existing thermostat.
   - Decide UART vs TCP for the OTGW link (UART preferred for standalone).
+  - Confirm the CCU3 is reachable from the Pico's IP range/VLAN and that
+    plain HTTP (no TLS) on the LAN is acceptable in this setup.
+  - Sanity-check the HmIP-SWO `ILLUMINATION` reading against the
+    `lux_low`/`lux_high` thresholds (both are in lux, so it should map
+    directly).
+  - Decide whether to keep the old HA mock's `away_mode` / `eco` keys for
+    existing-dashboard compatibility (§12).

@@ -1,0 +1,35 @@
+{
+  "DEVICE": {
+    "NAME": "micropy-system-test",
+    "MODEL": "pico2-w-rp2350"
+  },
+  "WIFI": {
+    "SSID": "your-wifi-ssid",
+    "PASS": "your-wifi-password"
+  },
+  "FIRMWARE": {
+    "GITHUB_REPO": "owner/application-repository",
+    "GITHUB_TOKEN": "",
+    "DIRECT_BASE_URL": null,
+    "UPDATE_ON_BOOT": true,
+    "CHUNK_SIZE": 2048,
+    "MAX_REDIRECTS": 10,
+    "CORE_SYSTEM_FILES": [
+      "boot.py",
+      "main.py",
+      "lib/coresys/manager_firmware.mpy",
+      "lib/coresys/manager_system.mpy",
+      "lib/coresys/manager_wifi.mpy",
+      "lib/coresys/manager_config.mpy",
+      "lib/coresys/logger.mpy",
+      "lib/coresys/manager_tasks.mpy"
+    ],
+    "MAX_FAILURE_ATTEMPTS": 3,
+    "NETWORK_TIMEOUT_MS": 60000,
+    "REQUEST_TIMEOUT_MS": 15000,
+    "RUNTIME_VERSION": "1.29.0",
+    "MPY_VERSION": 6,
+    "MPY_SUB_VERSION": 3,
+    "MPY_ARCH": "armv8m"
+  }
+}
