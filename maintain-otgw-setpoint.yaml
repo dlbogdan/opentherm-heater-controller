@@ -1,0 +1,12 @@
+alias: OTGW maintain setpoint
+triggers:
+  - seconds: /30
+    trigger: time_pattern
+conditions:
+  - condition: template
+    value_template: "{{ states('input_number.opentherm_ch_setpoint') | float > 20 }}"
+actions:
+  - action: opentherm_gw.set_control_setpoint
+    data:
+      gateway_id: viessmann_ot
+      temperature: "{{ states('input_number.opentherm_ch_setpoint') | float }}"

@@ -1,0 +1,678 @@
+blueprint:
+  name: "Boiler Weather Compensation with Solar Gain"
+  description: >-
+    Adjusts boiler flow temperature based on outdoor temperature and sun
+    illuminance (lux). Uses the radiator nonlinearity exponent (0.78) from the
+    Vaillant/Kühne heat curves, but without coupling to any single room
+    temperature, ideal for multi-zone houses where each zone has its own
+    thermostat.
+
+    On sunny days, the flow temperature is reduced to prevent overheating from
+    solar gain through windows.
+
+    Reference:
+    https://protonsforbreakfast.wordpress.com/2024/10/16/vaillant-heat-pump-controls-part-1-the-heat-curves/
+  domain: automation
+  source_url: https://github.com/dlbogdan/boiler-outdoor-dep/blob/main/boiler_weather_compensation.yaml
+
+  input:
+    # ── Entity selection (proper UI pickers) ──────────────────────────────
+    outdoor_temp_sensor:
+      name: "Outdoor Temperature Sensor"
+      description: "Sensor that reports outdoor temperature in °C"
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    outdoor_lux_sensor:
+      name: "Outdoor Illuminance Sensor"
+      description: "Sensor that reports outdoor light level in lux"
+      selector:
+        entity:
+          domain: sensor
+          device_class: illuminance
+
+    boiler_climate:
+      name: "Boiler / Heating Climate Entity (optional)"
+      description: "Climate entity for the boiler. Used for HVAC mode (on/off). If both this and the number entity are set, the number entity controls flow temperature and this controls on/off. If only this is set, it controls everything. At least one of this or the number entity must be configured."
+      default: ""
+      selector:
+        entity:
+          domain: climate
+
+    boiler_number_entity:
+      name: "Boiler Flow Temp Number Entity (optional)"
+      description: "Input number entity for flow temperature. If both this and the climate entity are set, this controls flow temperature and the climate entity controls on/off. If only this is set, on/off is achieved by writing the minimum flow temperature. At least one of this or the climate entity must be configured."
+      default: ""
+      selector:
+        entity:
+          domain: input_number
+
+    # ── Heat curve anchor points ──────────────────────────────────────────
+    design_outdoor_temp:
+      name: "Design Outdoor Temperature"
+      description: "Coldest outdoor temperature you expect (°C)"
+      default: -20
+      selector:
+        number:
+          min: -30
+          max: 5
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    design_flow_temp:
+      name: "Design Flow Temperature"
+      description: "Flow temperature needed on the coldest day (°C). Calibrated: 77 °C at -20 °C gives ~54 °C at 0 °C (with curve base 25 °C)."
+      default: 77
+      selector:
+        number:
+          min: 30
+          max: 80
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    curve_base_temp:
+      name: "Curve Base Temperature"
+      description: "Flow temperature at the heating-off threshold — the bottom anchor of the heat curve. This shapes the curve; use 'Minimum Flow Temperature' for a safety floor."
+      default: 25
+      selector:
+        number:
+          min: 15
+          max: 40
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    radiator_exponent:
+      name: "Radiator Exponent"
+      description: "Heat curve nonlinearity exponent. Derived from the radiator heat output law Q ∝ ΔT^n (EN 442: n≈1.3 for panel radiators, so b=1/n≈0.78). Lower values lift flow temps at mild outdoor temps without changing the design point. 0.78 = Vaillant/Kühne default (panel radiators). Try 0.72–0.75 if the warm end feels too cold."
+      default: 0.78
+      selector:
+        number:
+          min: 0.70
+          max: 0.85
+          step: 0.01
+          mode: slider
+
+    min_flow_temp:
+      name: "Flow Temp - Heating Off"
+      description: "When the calculated flow temperature drops to or below this, heating turns off (°C). Must be lower than 'Flow Temp - Heating On' to create a hysteresis dead zone. Also acts as the hard floor for the output flow temperature."
+      default: 25
+      selector:
+        number:
+          min: 15
+          max: 40
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    min_flow_temp_on:
+      name: "Flow Temp - Heating On"
+      description: "When the calculated flow temperature rises above this, heating turns back on (°C). Must be higher than 'Flow Temp - Heating Off'. The gap between them is the dead zone — prevents toggling when solar gain or demand fluctuations push flow temp near the cutoff."
+      default: 36
+      selector:
+        number:
+          min: 20
+          max: 50
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    heating_off_outdoor_temp:
+      name: "Outdoor Temp - Heating Off"
+      description: "Above this outdoor temperature, heating turns off (°C). Must be higher than 'Heating On' to create a hysteresis dead zone."
+      default: 18
+      selector:
+        number:
+          min: 10
+          max: 25
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+
+    heating_on_outdoor_temp:
+      name: "Outdoor Temp - Heating On"
+      description: "Below this outdoor temperature, heating turns back on (°C). Must be lower than 'Heating Off' to prevent rapid toggling."
+      default: 13
+      selector:
+        number:
+          min: 5
+          max: 20
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+
+    # ── Solar gain correction ─────────────────────────────────────────────
+    lux_threshold_low:
+      name: "Lux Threshold - Start Reduction"
+      description: "Illuminance (lux) at which solar offset begins"
+      default: 10000
+      selector:
+        number:
+          min: 0
+          max: 50000
+          step: 1000
+          unit_of_measurement: "lx"
+          mode: slider
+
+    lux_threshold_high:
+      name: "Lux Threshold - Max Reduction"
+      description: "Illuminance (lux) at which solar offset reaches maximum"
+      default: 40000
+      selector:
+        number:
+          min: 0
+          max: 100000
+          step: 1000
+          unit_of_measurement: "lx"
+          mode: slider
+
+    lux_max_offset:
+      name: "Max Solar Offset"
+      description: "Maximum flow temperature reduction due to sun (°C). This is the full capacity of the solar heat accumulator."
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 15
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+
+    solar_accumulator_helper:
+      name: "Solar Heat Accumulator (input_number)"
+      description: "Stores the solar heat soak level (0 to max offset, step 0.1). Displays on your dashboard as a gauge of how 'charged' the house is with solar heat. Use the + button to create one."
+      selector:
+        entity:
+          domain: input_number
+
+    solar_charge_rate:
+      name: "Solar Charge Rate"
+      description: "How fast the solar accumulator charges at full sun intensity (°C per minute). With half-life=25 min at 5°C outdoor, charge=0.15 gives an equilibrium of ~5.4°C at full sun (just above the default cap)."
+      default: 0.15
+      selector:
+        number:
+          min: 0.01
+          max: 2.0
+          step: 0.01
+          unit_of_measurement: "°C/min"
+          mode: slider
+
+    solar_decay_halflife:
+      name: "Solar Decay Half-Life"
+      description: "Minutes for the solar accumulator to lose half its stored heat (with no sun, at 5°C outdoor). Exponential decay: fast when full, slow when nearly empty. On colder days, decay is faster (Newton's law of cooling). 25 min suits moderate insulation; try 35–45 for well-insulated, 15–20 for poorly insulated."
+      default: 25
+      selector:
+        number:
+          min: 5
+          max: 120
+          step: 5
+          unit_of_measurement: "min"
+          mode: slider
+
+    lux_multiplier:
+      name: "Lux Sensor Multiplier"
+      description: "Scale factor for the lux reading. Use >1 if the sensor is partially shaded (e.g. 2.0 = sensor reads half of real sun). Use <1 if sensor is over-exposed."
+      default: 1.0
+      selector:
+        number:
+          min: 0.1
+          max: 5.0
+          step: 0.1
+          unit_of_measurement: "×"
+          mode: slider
+
+    # ── Heating demand — P controller ──────────────────────────────────────
+    heating_demand_sensor:
+      name: "Total Heating Demand Sensor (optional)"
+      description: "Sensor reporting total heating demand (0-100). Drives the P controller that adjusts flow temperature. Leave empty to disable demand-based adjustment."
+      default: ""
+      selector:
+        entity:
+          domain: sensor
+
+    heating_demand_neutral:
+      name: "P Neutral Point"
+      description: "Demand value that produces zero P adjustment. Below this, the P-term reduces flow temp; above it, the P-term increases flow temp."
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.1
+          mode: slider
+
+    heating_demand_rate:
+      name: "P-Gain (°C per demand unit)"
+      description: "Proportional gain applied after the power-law exponent. Final P-offset = gain × |deviation|^exponent × sign(deviation). With gain=2, exponent=0.4: demand 0.4 above neutral → +1.4°C; demand 7 above → +4.4°C."
+      default: 0.1
+      selector:
+        number:
+          min: 0.05
+          max: 5.0
+          step: 0.05
+          unit_of_measurement: "°C/unit"
+          mode: slider
+
+    heating_demand_exponent:
+      name: "P-Term Exponent"
+      description: "Power-law exponent for the P-term. 1.0 = linear (standard). <1 = logarithmic-like (boosts low demand, compresses high). 0.4 recommended: demand 0.4 → 73% of demand 1.0's offset. 0.5 = square root. 0.1 = nearly flat."
+      default: 1.0
+      selector:
+        number:
+          min: 0.1
+          max: 1.0
+          step: 0.05
+          mode: slider
+
+    max_demand_offset:
+      name: "Max P-Offset"
+      description: "Maximum °C the proportional (P) term can add or subtract from the base flow temperature, regardless of P-gain."
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    demand_p_offset_helper:
+      name: "P-Offset Monitor (input_number, optional)"
+      description: "Tracks the current P-offset so you can graph it on your dashboard (min=-10, max=10, step=0.1). Leave empty to skip. Use the + button to create one."
+      default: ""
+      selector:
+        entity:
+          domain: input_number
+
+    # ── Output clamp ─────────────────────────────────────────────────────
+    max_flow_temp:
+      name: "Maximum Flow Temperature"
+      description: "Hard upper limit for the calculated flow temperature (°C)"
+      default: 67
+      selector:
+        number:
+          min: 45
+          max: 75
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+    # ── API rate limiting ────────────────────────────────────────────────
+    min_change_threshold:
+      name: "Minimum Change Threshold"
+      description: "Only send a new temperature to the boiler if the target differs from the current setpoint by at least this many degrees. Reduces unnecessary API calls."
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          unit_of_measurement: "°C"
+          mode: slider
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Automation definition
+# ═══════════════════════════════════════════════════════════════════════════
+mode: restart
+
+trigger:
+  # Periodic re-evaluation
+  - platform: time_pattern
+    minutes: "/5"
+    id: periodic
+
+  # React to outdoor temperature changes (debounced — wait 5 min of stable value)
+  - platform: state
+    entity_id: !input outdoor_temp_sensor
+    id: outdoor_temp_change
+    for:
+      minutes: 5
+
+  # React to illuminance swings (debounced — wait 5 min of stable value)
+  - platform: state
+    entity_id: !input outdoor_lux_sensor
+    id: lux_change
+    for:
+      minutes: 5
+
+condition: []
+
+action:
+  # ── Resolve entity IDs from blueprint inputs ───────────────────────────
+  - variables:
+      outdoor_temp_entity: !input outdoor_temp_sensor
+      outdoor_lux_entity: !input outdoor_lux_sensor
+      heating_demand_entity: !input heating_demand_sensor
+      solar_accum_entity: !input solar_accumulator_helper
+      boiler_climate_entity: !input boiler_climate
+      demand_p_offset_entity: !input demand_p_offset_helper
+      boiler_number: !input boiler_number_entity
+      use_number_mode: "{{ boiler_number | default('', true) | length > 0 }}"
+      use_climate_mode: "{{ boiler_climate_entity | default('', true) | length > 0 }}"
+
+  # ── Check sensor availability before proceeding ────────────────────────
+  - condition: template
+    value_template: >-
+      {{ states(outdoor_temp_entity) not in ['unavailable', 'unknown']
+         and states(outdoor_lux_entity) not in ['unavailable', 'unknown'] }}
+
+  # ── Gather all inputs into variables ────────────────────────────────────
+  - variables:
+      # Sensor readings
+      t_out: "{{ states(outdoor_temp_entity) | float(10) }}"
+      lux_raw: "{{ states(outdoor_lux_entity) | float(0) }}"
+      lux_mult: !input lux_multiplier
+      lux: "{{ (lux_raw | float * lux_mult | float) | round(0) }}"
+
+      # Heat curve parameters
+      t_design: !input design_outdoor_temp
+      flow_design: !input design_flow_temp
+      curve_base: !input curve_base_temp
+      flow_min: !input min_flow_temp
+      flow_min_on: !input min_flow_temp_on
+      t_off: !input heating_off_outdoor_temp
+      t_on: !input heating_on_outdoor_temp
+
+      # Solar parameters
+      lux_low: !input lux_threshold_low
+      lux_high: !input lux_threshold_high
+      max_solar_offset: !input lux_max_offset
+      solar_charge: !input solar_charge_rate
+      solar_halflife: !input solar_decay_halflife
+      solar_accum_prev: "{{ states(solar_accum_entity) | float(0) }}"
+      solar_dt_min: >-
+        {% set last_ts = as_timestamp(states[solar_accum_entity].last_updated, 0) %}
+        {% set now_ts = as_timestamp(now()) %}
+        {% if last_ts > 0 %}
+          {{ [(now_ts - last_ts) / 60, 30] | min | round(2) }}
+        {% else %}
+          5
+        {% endif %}
+
+      # Heating demand — P controller parameters
+      demand_neutral: !input heating_demand_neutral
+      demand_rate: !input heating_demand_rate
+      demand_exponent: !input heating_demand_exponent
+      demand_max_p_offset: !input max_demand_offset
+
+      # Heating demand — P-term (power-law proportional offset from neutral)
+      demand_raw: >-
+        {% if heating_demand_entity | default('', true) | length > 0
+           and states(heating_demand_entity) not in ['unavailable', 'unknown', ''] %}
+          {{ states(heating_demand_entity) | float(0) }}
+        {% else %}
+          {{ demand_neutral }}
+        {% endif %}
+      demand_p_offset: >-
+        {% set dev = demand_raw | float - demand_neutral | float %}
+        {% set abs_dev = dev | abs %}
+        {% set sign = 1 if dev >= 0 else -1 %}
+        {% set exp = demand_exponent | float %}
+        {% set gain = demand_rate | float %}
+        {% set shaped = abs_dev ** exp %}
+        {% set raw_offset = sign * gain * shaped %}
+        {{ [[-1 * (demand_max_p_offset | float), raw_offset] | max, demand_max_p_offset | float] | min | round(1) }}
+
+      # Output clamp
+      flow_max: !input max_flow_temp
+
+      # Radiator nonlinearity exponent (from input)
+      b: !input radiator_exponent
+
+  # ── Compute flow temperature ────────────────────────────────────────────
+  - variables:
+      # Base flow temp from heat curve
+      base_flow: >-
+        {% if t_out | float >= t_off | float %}
+          {{ curve_base }}
+        {% elif t_out | float <= t_design | float %}
+          {{ flow_design }}
+        {% else %}
+          {% set demand = (t_off | float - t_out | float) / (t_off | float - t_design | float) %}
+          {{ (curve_base | float + (flow_design | float - curve_base | float) * (demand ** b)) | round(1) }}
+        {% endif %}
+
+      # Solar heat accumulator: exact ODE solution with exponential decay
+      # dA/dt = r·f − k·A  →  A_new = A_eq + (A_prev − A_eq) · 2^(−k·dt/ln2)
+      # Decay is temperature-dependent (Newton's law of cooling):
+      #   colder outdoor → faster heat loss → higher k → lower equilibrium
+      lux_fraction: >-
+        {% if lux | float <= lux_low | float %}
+          0
+        {% elif lux | float >= lux_high | float %}
+          1
+        {% else %}
+          {{ ((lux | float - lux_low | float) / (lux_high | float - lux_low | float)) | round(3) }}
+        {% endif %}
+      solar_offset: >-
+        {% set dt = solar_dt_min | float %}
+        {% set r = solar_charge | float %}
+        {% set f = lux_fraction | float %}
+        {% set hl_base = solar_halflife | float %}
+        {% set cap = max_solar_offset | float %}
+        {% set prev = solar_accum_prev | float %}
+        {% set t_out_val = t_out | float %}
+        {# Temperature-dependent decay: base half-life at T_out=5°C, floor factor 0.5 #}
+        {% set t_indoor = 20.0 %}
+        {% set t_ref = 5.0 %}
+        {% set temp_factor = [0.5, (t_indoor - t_out_val) / (t_indoor - t_ref)] | max %}
+        {% set k = 0.693147 / hl_base * temp_factor %}
+        {# Exact solution: approach equilibrium exponentially #}
+        {% if k > 0 %}
+          {% set a_eq = r * f / k %}
+          {% set decay_factor = 2 ** (-k * dt / 0.693147) %}
+          {% set new_val = a_eq + (prev - a_eq) * decay_factor %}
+        {% else %}
+          {% set new_val = prev + r * f * dt %}
+        {% endif %}
+        {{ [0, [new_val, cap] | min] | max | round(1) }}
+
+
+
+  # ── Write solar accumulator back to helper (only on periodic trigger) ───
+  - if:
+      - condition: trigger
+        id: periodic
+    then:
+      - service: input_number.set_value
+        target:
+          entity_id: !input solar_accumulator_helper
+        data:
+          value: "{{ solar_offset }}"
+
+  # ── Write P-offset to monitor helper (every run) ─────────────────────────
+  - if:
+      - condition: template
+        value_template: "{{ demand_p_offset_entity | default('', true) | length > 0 }}"
+    then:
+      - service: input_number.set_value
+        data:
+          entity_id: "{{ demand_p_offset_entity }}"
+          value: "{{ demand_p_offset }}"
+
+  - variables:
+      # P demand offset applied to base flow
+      demand_adjusted_flow: >-
+        {{ (base_flow | float + demand_p_offset | float) | round(1) }}
+      # Raw target before clamping (used to detect "no real demand")
+      target_flow_raw: >-
+        {{ (demand_adjusted_flow | float - solar_offset | float) | round(1) }}
+      # Final clamped target (integer for boiler)
+      target_flow: >-
+        {{ [flow_min | float, [target_flow_raw | float, flow_max | float] | min] | max | round(0) | int }}
+
+  # ── Rate limiting: read current boiler setpoint ─────────────────────
+  - variables:
+      min_change: !input min_change_threshold
+      current_setpoint: >-
+        {% if use_number_mode %}
+          {{ states(boiler_number) | float(0) }}
+        {% else %}
+          {{ state_attr(boiler_climate_entity, 'temperature') | float(0) }}
+        {% endif %}
+      current_mode: >-
+        {% if use_climate_mode %}
+          {{ states(boiler_climate_entity) }}
+        {% else %}
+          {% if states(boiler_number) | float(0) <= 20 %}off{% else %}heat{% endif %}
+        {% endif %}
+      change_big_enough: "{{ (target_flow | int - current_setpoint | int) | abs >= min_change | int }}"
+      # Should we turn off? (outdoor warm enough OR calculated flow ≤ off-threshold)
+      should_heat_off: "{{ t_out | float >= t_off | float or target_flow_raw | float <= flow_min | float }}"
+      # Should we turn on? (outdoor cold enough AND calculated flow above on-threshold AND demand present if sensor configured)
+      should_heat_on: "{{ t_out | float < t_on | float and target_flow_raw | float > flow_min_on | float and (heating_demand_entity | default('', true) | length == 0 or demand_raw | float > demand_neutral | float) }}"
+      # Dead zone: between t_on/t_off OR between flow_min/flow_min_on → maintain current state
+      in_dead_zone: "{{ not should_heat_off and not should_heat_on }}"
+      # Reason for dead zone (for logging)
+      dead_zone_reason: >-
+        {% if not should_heat_off and not should_heat_on %}
+          {% if t_out | float >= t_on | float and t_out | float < t_off | float %}
+            outdoor temp {{ t_out }}°C in dead zone ({{ t_on }}-{{ t_off }}°C)
+          {% elif t_out | float < t_on | float and target_flow_raw | float <= flow_min_on | float %}
+            outdoor temp {{ t_out }}°C < {{ t_on }}°C but calculated flow {{ target_flow_raw }}°C ≤ flow-on threshold {{ flow_min_on }}°C (solar offset: {{ solar_offset }}°C, P-offset: {{ demand_p_offset }}°C)
+          {% else %}
+            outdoor temp {{ t_out }}°C, flow {{ target_flow_raw }}°C — no clear on/off signal
+          {% endif %}
+        {% else %}
+          not in dead zone
+        {% endif %}
+      # Calculated flow too low → treat like outdoor-warm-enough
+      flow_below_min: "{{ target_flow_raw | float <= flow_min | float }}"
+      # Mode change (off → heat or heat → off) always goes through
+      mode_change: >-
+        {% if should_heat_off and current_mode != 'off' %}true
+        {% elif should_heat_on and current_mode == 'off' %}true
+        {% else %}false{% endif %}
+      # In dead zone while off → suppress updates unless setpoint needs resetting to off-value
+      dead_zone_hold: "{{ in_dead_zone and current_mode == 'off' }}"
+      needs_off_setpoint: "{{ dead_zone_hold and use_number_mode and current_setpoint | int != 20 }}"
+      should_update: "{{ needs_off_setpoint or (not dead_zone_hold and (mode_change == 'true' or change_big_enough)) }}"
+
+  # ── Skip if no meaningful change ─────────────────────────────────────
+  - condition: template
+    value_template: "{{ should_update }}"
+
+  # ── Apply to boiler ────────────────────────────────────────────────────
+  - choose:
+      # Outdoor temp warm enough → turn heating off
+      - conditions:
+          - condition: template
+            value_template: "{{ t_out | float >= t_off | float }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ use_climate_mode }}"
+            then:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ boiler_climate_entity }}"
+                data:
+                  hvac_mode: "off"
+          - if:
+              - condition: template
+                value_template: "{{ use_number_mode and not use_climate_mode }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ boiler_number }}"
+                data:
+                  value: 20
+          - service: system_log.write
+            data:
+              message: >-
+                Weather Comp: Outdoor {{ t_out }}°C ≥ off-threshold {{ t_off }}°C → heating OFF (on-threshold {{ t_on }}°C)
+              level: info
+
+      # Calculated flow temp at or below minimum → no real demand, turn off
+      - conditions:
+          - condition: template
+            value_template: "{{ flow_below_min }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ use_climate_mode }}"
+            then:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ boiler_climate_entity }}"
+                data:
+                  hvac_mode: "off"
+          - if:
+              - condition: template
+                value_template: "{{ use_number_mode and not use_climate_mode }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ boiler_number }}"
+                data:
+                  value: 20
+          - service: system_log.write
+            data:
+              message: >-
+                Weather Comp: Calculated flow {{ target_flow_raw }}°C ≤ min {{ flow_min }}°C → no demand, heating OFF
+              level: info
+
+      # Dead zone: between t_on and t_off while currently off → stay off, but ensure setpoint is at off-value
+      - conditions:
+          - condition: template
+            value_template: "{{ in_dead_zone and current_mode == 'off' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ needs_off_setpoint }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ boiler_number }}"
+                data:
+                  value: 20
+          - service: system_log.write
+            data:
+              message: >-
+                Weather Comp: Dead zone hold — {{ dead_zone_reason }} → staying OFF (setpoint reset: {{ needs_off_setpoint }})
+              level: info
+
+    # Otherwise → set calculated flow temperature
+    default:
+      - if:
+          - condition: template
+            value_template: "{{ use_number_mode }}"
+        then:
+          - service: input_number.set_value
+            target:
+              entity_id: "{{ boiler_number }}"
+            data:
+              value: "{{ target_flow }}"
+      - if:
+          - condition: template
+            value_template: "{{ use_climate_mode and use_number_mode }}"
+        then:
+          - service: climate.set_hvac_mode
+            target:
+              entity_id: "{{ boiler_climate_entity }}"
+            data:
+              hvac_mode: auto
+      - if:
+          - condition: template
+            value_template: "{{ use_climate_mode and not use_number_mode }}"
+        then:
+          - service: climate.set_temperature
+            target:
+              entity_id: "{{ boiler_climate_entity }}"
+            data:
+              temperature: "{{ target_flow }}"
+              hvac_mode: auto
+      - service: system_log.write
+        data:
+          message: >-
+            Weather Comp: Outdoor={{ t_out }}°C (on<{{ t_on }}°C, off≥{{ t_off }}°C),
+            Lux={{ lux }}(raw={{ lux_raw }},x={{ lux_mult }}),
+            SolarAccum={{ solar_offset }}°C(prev={{ solar_accum_prev }},dt={{ solar_dt_min }}min,lux_frac={{ lux_fraction }},hl={{ solar_halflife }}min,temp_fac={{ [0.5, (20.0 - t_out | float) / 15.0] | max | round(2) }},a_eq={{ ((solar_charge | float * lux_fraction | float) / (0.693147 / (solar_halflife | float) * [0.5, (20.0 - t_out | float) / 15.0] | max)) | round(1) if lux_fraction | float > 0 else 0 }}),
+            Base={{ base_flow }}°C, DemandAdj={{ demand_adjusted_flow }}°C(P={{ demand_p_offset }}°C,demand={{ demand_raw }},neutral={{ demand_neutral }},rate={{ demand_rate }}),
+            MaxClamp={{ flow_max }}°C, Prev={{ current_setpoint }}°C, Δ={{ (target_flow | int - current_setpoint | int) | abs }}°C
+            → Flow target={{ target_flow }}°C
+          level: info

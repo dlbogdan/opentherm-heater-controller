@@ -1,0 +1,271 @@
+# =============================================================================
+# Boiler Weather Compensation with Solar Gain Adjustment
+# =============================================================================
+#
+# Direct outdoor-temperature-to-flow-temperature mapping with radiator
+# nonlinearity compensation and solar gain correction.
+#
+# The flow temperature is interpolated between two anchor points:
+#   - Design day:  T_out = design_outdoor → T_flow = design_flow
+#   - Warm day:    T_out = heating_off    → T_flow = min_flow
+#
+# A power-law exponent (0.78) compensates for the nonlinear heat output
+# of radiators (convection scales as ΔT^1.3, so the inverse is ~0.78).
+# This is the same physics behind the Vaillant/Kühne heat curves, but
+# without coupling to any single room temperature setpoint — ideal for
+# multi-zone houses where each zone has its own thermostat/TRV.
+#
+# Solar gain correction:
+#   When sun illumination (lux) is high, the building receives free heat
+#   through windows. The automation reduces the calculated flow temperature
+#   proportionally to how much solar energy is offsetting heat losses.
+#
+# Reference:
+#   https://protonsforbreakfast.wordpress.com/2024/10/16/vaillant-heat-pump-controls-part-1-the-heat-curves/
+#   https://protonsforbreakfast.wordpress.com/2024/10/18/vaillant-heat-pump-controls-part-3-formulas-and-spreadsheet/
+#
+# =============================================================================
+# INSTALLATION:
+#   1. Copy this file to your Home Assistant config/packages/ directory
+#   2. Ensure packages are enabled in configuration.yaml:
+#        homeassistant:
+#          packages: !include_dir_named packages/
+#   3. Replace sensor entity IDs in the automation with your actual sensors
+#   4. Replace the climate/boiler entity with your actual boiler entity
+#   5. Restart Home Assistant
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Configurable parameters (adjustable from the HA UI)
+# ---------------------------------------------------------------------------
+input_number:
+  boiler_design_outdoor_temp:
+    name: "Design Outdoor Temperature"
+    icon: mdi:snowflake-thermometer
+    min: -25
+    max: 5
+    step: 1
+    initial: -20
+    unit_of_measurement: "°C"
+    mode: slider
+
+  boiler_design_flow_temp:
+    name: "Design Flow Temperature"
+    icon: mdi:fire
+    min: 30
+    max: 80
+    step: 1
+    initial: 77
+    unit_of_measurement: "°C"
+    mode: slider
+
+  boiler_min_flow_temp:
+    name: "Minimum Flow Temperature"
+    icon: mdi:thermometer-low
+    min: 20
+    max: 35
+    step: 1
+    initial: 25
+    unit_of_measurement: "°C"
+    mode: slider
+
+  # Solar gain correction parameters
+  boiler_lux_threshold_low:
+    name: "Lux Threshold - Start Reduction"
+    icon: mdi:weather-sunny
+    min: 0
+    max: 50000
+    step: 1000
+    initial: 10000
+    unit_of_measurement: "lx"
+    mode: slider
+
+  boiler_lux_threshold_high:
+    name: "Lux Threshold - Max Reduction"
+    icon: mdi:white-balance-sunny
+    min: 0
+    max: 100000
+    step: 1000
+    initial: 40000
+    unit_of_measurement: "lx"
+    mode: slider
+
+  boiler_lux_max_offset:
+    name: "Max Solar Offset"
+    icon: mdi:thermometer-minus
+    min: 0
+    max: 15
+    step: 0.5
+    initial: 5
+    unit_of_measurement: "°C"
+    mode: slider
+
+  boiler_outdoor_heating_threshold:
+    name: "Outdoor Temp - Heating Off"
+    icon: mdi:thermometer-off
+    min: 10
+    max: 25
+    step: 0.5
+    initial: 18
+    unit_of_measurement: "°C"
+    mode: slider
+
+# ---------------------------------------------------------------------------
+# Toggle: enable / disable the automation
+# ---------------------------------------------------------------------------
+input_boolean:
+  boiler_weather_comp_enabled:
+    name: "Weather Compensation Enabled"
+    icon: mdi:thermostat-auto
+
+# ---------------------------------------------------------------------------
+# Template sensors - computed values visible in the dashboard
+# ---------------------------------------------------------------------------
+template:
+  - sensor:
+      # ---- Base flow temperature from outdoor temp (no solar offset) ----
+      - name: "Boiler Base Flow Temperature"
+        unique_id: boiler_base_flow_temp
+        unit_of_measurement: "°C"
+        icon: mdi:thermometer-water
+        state: >-
+          {% set t_out      = states('sensor.outdoor_temperature') | float(10) %}
+          {% set t_off      = states('input_number.boiler_outdoor_heating_threshold') | float(18) %}
+          {% set t_design   = states('input_number.boiler_design_outdoor_temp') | float(-5) %}
+          {% set flow_design = states('input_number.boiler_design_flow_temp') | float(50) %}
+          {% set flow_min   = states('input_number.boiler_min_flow_temp') | float(25) %}
+          {% set b = 0.78 %}
+          {% if t_out >= t_off %}
+            {{ flow_min }}
+          {% elif t_out <= t_design %}
+            {{ flow_design }}
+          {% else %}
+            {% set demand = (t_off - t_out) / (t_off - t_design) %}
+            {% set t_flow = flow_min + (flow_design - flow_min) * (demand ** b) %}
+            {{ t_flow | round(1) }}
+          {% endif %}
+
+      # ---- Solar gain offset (°C to subtract) ----
+      - name: "Boiler Solar Offset"
+        unique_id: boiler_solar_offset
+        unit_of_measurement: "°C"
+        icon: mdi:weather-sunny-alert
+        state: >-
+          {% set lux       = states('sensor.outdoor_illuminance') | float(0) %}
+          {% set lux_low   = states('input_number.boiler_lux_threshold_low') | float(10000) %}
+          {% set lux_high  = states('input_number.boiler_lux_threshold_high') | float(40000) %}
+          {% set max_off   = states('input_number.boiler_lux_max_offset') | float(5) %}
+          {% if lux <= lux_low %}
+            0
+          {% elif lux >= lux_high %}
+            {{ max_off }}
+          {% else %}
+            {{ ((lux - lux_low) / (lux_high - lux_low) * max_off) | round(1) }}
+          {% endif %}
+
+      # ---- Final target flow temperature (base − solar offset), clamped ----
+      - name: "Boiler Target Flow Temperature"
+        unique_id: boiler_target_flow_temp
+        unit_of_measurement: "°C"
+        icon: mdi:thermostat
+        state: >-
+          {% set base       = states('sensor.boiler_base_flow_temperature') | float(30) %}
+          {% set offset     = states('sensor.boiler_solar_offset') | float(0) %}
+          {% set flow_min   = states('input_number.boiler_min_flow_temp') | float(25) %}
+          {% set flow_design = states('input_number.boiler_design_flow_temp') | float(50) %}
+          {{ [flow_min, [(base - offset) | round(1), flow_design] | min] | max }}
+
+# ---------------------------------------------------------------------------
+# Automation: adjust boiler temperature on sensor changes
+# ---------------------------------------------------------------------------
+automation:
+  - id: boiler_weather_compensation
+    alias: "Boiler - Weather Compensation with Solar Gain"
+    description: >-
+      Adjusts the boiler flow temperature based on the Kühne heat-curve formula
+      and reduces it when strong sunshine provides free solar gain.
+    mode: restart   # restart if a new trigger fires while still running
+
+    trigger:
+      # Re-evaluate every 10 minutes as a baseline
+      - platform: time_pattern
+        minutes: "/10"
+
+      # React to meaningful outdoor temperature changes (± 1 °C)
+      - platform: state
+        entity_id: sensor.outdoor_temperature
+        id: outdoor_temp_change
+
+      # React to large illuminance swings (cloud passing, sunrise/sunset)
+      - platform: state
+        entity_id: sensor.outdoor_illuminance
+        id: lux_change
+
+      # React when the user changes any tuning parameter
+      - platform: state
+        entity_id:
+          - input_number.boiler_design_outdoor_temp
+          - input_number.boiler_design_flow_temp
+          - input_number.boiler_min_flow_temp
+          - input_number.boiler_lux_threshold_low
+          - input_number.boiler_lux_threshold_high
+          - input_number.boiler_lux_max_offset
+          - input_number.boiler_outdoor_heating_threshold
+        id: parameter_change
+
+    condition:
+      # Only run when the toggle is on
+      - condition: state
+        entity_id: input_boolean.boiler_weather_comp_enabled
+        state: "on"
+
+      # Only run when outdoor sensors are available
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: sensor.outdoor_temperature
+            state: "unavailable"
+          - condition: state
+            entity_id: sensor.outdoor_illuminance
+            state: "unavailable"
+
+    action:
+      - variables:
+          t_out: "{{ states('sensor.outdoor_temperature') | float(10) }}"
+          heating_off_temp: "{{ states('input_number.boiler_outdoor_heating_threshold') | float(18) }}"
+          target_flow: "{{ states('sensor.boiler_target_flow_temperature') | float(30) }}"
+
+      # --- If outdoor temp is warm enough, turn heating off ---
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ t_out | float >= heating_off_temp | float }}"
+            sequence:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: climate.boiler
+                data:
+                  hvac_mode: "off"
+              - service: system_log.write
+                data:
+                  message: >-
+                    Weather Comp: Outdoor {{ t_out }}°C ≥ threshold {{ heating_off_temp }}°C
+                    → heating OFF
+                  level: info
+
+        # --- Otherwise set the calculated flow temperature ---
+        default:
+          - service: climate.set_temperature
+            target:
+              entity_id: climate.boiler
+            data:
+              temperature: "{{ target_flow }}"
+              hvac_mode: heat
+          - service: system_log.write
+            data:
+              message: >-
+                Weather Comp: Outdoor={{ t_out }}°C, Lux={{ states('sensor.outdoor_illuminance') }},
+                Base={{ states('sensor.boiler_base_flow_temperature') }}°C,
+                SolarOffset={{ states('sensor.boiler_solar_offset') }}°C
+                → Flow target={{ target_flow }}°C
+              level: info
