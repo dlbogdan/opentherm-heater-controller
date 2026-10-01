@@ -137,12 +137,16 @@ away):
   **present** but an incomplete tree is "up-to-date" and left app-less, so the
   version file must never precede the tree.
 - **Provisioning a new board must not trust `.otc-device-ip`.** That file may
-  identify another Pico. After the app reaches its main loop and the USB log
-  read interrupts it, provisioning queries the live WLAN interface directly
-  (`network.WLAN(network.STA_IF).ifconfig()[0]`) before its final USB reset.
-  Serial-only DHCP messages are not persisted in `/log.txt`, so parsing that
-  file is unreliable. Only successful HTTP validation writes the address to
-  `.otc-device-ip`. `OTC_IP` remains an explicit override.
+  identify another Pico. After one intentional reset, provisioning passively
+  reads serial output (pyserial, no Ctrl-C/raw REPL) until it sees both the app
+  main-loop marker and `WiFiManager: Connected ... (<IP>)`. The app logs its
+  main-loop marker immediately after starting the asynchronous Wi-Fi task, so
+  interrupting there and querying `ifconfig()` races DHCP and returned
+  `0.0.0.0` on-device. Serial-only DHCP messages are not persisted in
+  `/log.txt`, so parsing that file is also unreliable. After capture, the
+  required final USB reset is the last USB operation; only successful HTTP
+  validation writes the address to `.otc-device-ip`. `OTC_IP` remains an
+  explicit override.
 
 ## Firmware entry and A/B layout
 

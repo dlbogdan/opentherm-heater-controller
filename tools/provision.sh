@@ -329,52 +329,86 @@ if [ -f app/version.txt ]; then
     fi
 fi
 
-# --- Reset, verify boot over USB ----------------------------------------------------
-# Each check cycle resets the board, gives the app time to boot (it file-logs its
-# progress), then reads /log.txt. Reading via raw REPL interrupts the app, so the
-# final reset below is what leaves it autonomous (same rule as the USB deploy path).
-echo "==> Verifying the app boots (USB)"
-deadline=$(( $(date +%s) + 90 ))
-OK=0
-LOG=""
-while [ "$(date +%s)" -lt "$deadline" ]; do
-    "$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
-    sleep 12
-    LOG=$("$MPREMOTE" connect "$PORT" resume cat :/log.txt 2>/dev/null | tail -30) || LOG=""
-    case "$LOG" in
-        *"entering main loop"*) OK=1; break ;;
-    esac
-done
-if [ "$OK" -ne 1 ]; then
-    echo "ERROR: the app did not reach its main loop. Last log lines:" >&2
-    printf '%s\n' "$LOG" >&2
-    exit 1
-fi
-echo "==> App booted and reached the main loop"
+# --- Reset, verify boot and capture DHCP over passive serial -----------------------
+# Wi-Fi connects asynchronously after the app logs "entering main loop". Do not
+# use mpremote to poll it: entering raw REPL sends Ctrl-C and freezes that task.
+# Instead, reset once and passively observe serial until both the main-loop marker
+# and (when Wi-Fi is configured) WiFiManager's real DHCP address appear.
+FINAL_SSID=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("WIFI",{}).get("SSID","") or "")' "$CONFIG_OUT" 2>/dev/null) || FINAL_SSID=""
+EXPECT_WIFI=0
+[ -n "$FINAL_SSID" ] && EXPECT_WIFI=1
 
-# Reading the log above interrupted the app but did not reset the interpreter
-# or WLAN interface. Query this physical board's live DHCP address directly
-# before the final reset; serial-only WiFiManager messages are not persisted in
-# /log.txt, and .otc-device-ip may identify a different Pico.
-DETECTED_IP=$("$MPREMOTE" connect "$PORT" resume exec \
-    "import network; print(network.WLAN(network.STA_IF).ifconfig()[0])" \
-    2>/dev/null | tr -d '\r' | tail -1) || DETECTED_IP=""
-case "$DETECTED_IP" in
-    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
-    echo "==> Board reported DHCP address: $DETECTED_IP"
-    ;;
-    *)
-        DETECTED_IP=""
-        echo "    note: the board did not report a DHCP address before reset"
-    ;;
+echo "==> Verifying app boot and DHCP (passive USB serial)"
+"$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
+BOOT_RESULT=$("$PYTHON" - "$PORT" "$EXPECT_WIFI" <<'PY'
+import re
+import sys
+import time
+
+import serial
+
+port = sys.argv[1]
+expect_wifi = sys.argv[2] == "1"
+deadline = time.monotonic() + 90
+stream = ""
+main_seen = False
+ip_address = ""
+connection = None
+
+while time.monotonic() < deadline:
+    if connection is None:
+        try:
+            connection = serial.Serial(port, 115200, timeout=0.5)
+        except (OSError, serial.SerialException):
+            time.sleep(0.25)
+            continue
+    try:
+        chunk = connection.read(connection.in_waiting or 1)
+    except (OSError, serial.SerialException):
+        try:
+            connection.close()
+        except Exception:
+            pass
+        connection = None
+        time.sleep(0.25)
+        continue
+    if not chunk:
+        continue
+    stream = (stream + chunk.decode("utf-8", "replace"))[-16384:]
+    main_seen = main_seen or "entering main loop" in stream
+    matches = re.findall(
+        r"WiFiManager: Connected to .*? \((\d{1,3}(?:\.\d{1,3}){3})\)",
+        stream,
+    )
+    if matches and matches[-1] != "0.0.0.0":
+        ip_address = matches[-1]
+    if main_seen and (not expect_wifi or ip_address):
+        break
+
+if connection is not None:
+    connection.close()
+print("MAIN=%d" % main_seen)
+print("IP=%s" % ip_address)
+sys.exit(0 if main_seen else 1)
+PY
+) || BOOT_RESULT=""
+
+case "$BOOT_RESULT" in
+    *"MAIN=1"*) echo "==> App booted and reached the main loop" ;;
+    *) echo "ERROR: the app did not reach its main loop within 90s." >&2; exit 1 ;;
 esac
+DETECTED_IP=$(printf '%s\n' "$BOOT_RESULT" | sed -n 's/^IP=//p' | tail -1)
+if [ -n "$DETECTED_IP" ]; then
+    echo "==> Board reported DHCP address: $DETECTED_IP"
+elif [ "$EXPECT_WIFI" = 1 ]; then
+    echo "    note: the app booted but Wi-Fi did not receive DHCP within 90s"
+fi
 
 # --- Final reset: restore autonomous execution ---------------------------------------
 echo "==> Final reset (restores autonomous execution)"
 "$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
 
 # --- Confirm network autonomy (best effort; only if an SSID was configured) ----------
-FINAL_SSID=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("WIFI",{}).get("SSID","") or "")' "$CONFIG_OUT" 2>/dev/null) || FINAL_SSID=""
 if [ -z "$FINAL_SSID" ]; then
     echo "==> PROVISION OK (USB-verified). No Wi-Fi SSID was configured, so the board"
     echo "    is autonomous but offline. Re-run with --ssid \"...\" --pass \"...\" to give it Wi-Fi."
