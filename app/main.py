@@ -85,6 +85,8 @@ def _apply_static_ip():
 
 
 async def main():
+    logger.info("App: main entered.", log_to_file=True)
+
     # 1. Slot confirmation FIRST (the WDT candidate window is only 12 s).
     _confirm_running_slot()
 
@@ -99,7 +101,9 @@ async def main():
         tasks.create_periodic_task(
             wifi.refresh, interval_ms=500, task_id="wifi_keepalive",
             description="Wi-Fi keepalive", is_coroutine=True)
-        logger.info("App: Wi-Fi connect kicked off; keepalive task running.")
+        logger.info(
+            "App: Wi-Fi connect kicked off; keepalive task running.",
+            log_to_file=True)
     else:
         logger.info("App: no Wi-Fi SSID configured; running offline.")
 

@@ -32,8 +32,8 @@ import uos
 import lib.coresys.logger as logger
 from lib.coresys.ota_state import load_state
 
-import config
-import state
+from config import config
+from state import state
 
 SERVICE_NAME = "otc-net"
 END_MARKER = "<<<END>>>"
@@ -100,12 +100,17 @@ class NetService:
 
     @staticmethod
     def _log_tail(n):
+        n = min(200, max(1, n))
+        lines = []
         try:
-            data = open("/log.txt").read()
+            with open("/log.txt") as log_file:
+                for line in log_file:
+                    lines.append(line.rstrip("\r\n"))
+                    if len(lines) > n:
+                        lines.pop(0)
         except OSError:
             return "(no log)"
-        lines = data.splitlines()
-        return "\n".join(lines[-max(1, n):])
+        return "\n".join(lines)
 
     @staticmethod
     def _run_selftest():
@@ -115,15 +120,8 @@ class NetService:
             except Exception:
                 pass
         import selftest
-        old = sys.stdout
-        buf = io.StringIO()
-        sys.stdout = buf
-        ok = False
-        try:
-            ok = selftest.run()
-        finally:
-            sys.stdout = old
-        return ok, buf.getvalue()
+        ok = selftest.run()
+        return ok, "control core self-test: %s" % ("PASS" if ok else "FAIL")
 
     # ----------------------------------------------------------------------- HTTP
     async def _read_request(self, reader):
@@ -196,7 +194,8 @@ class NetService:
         ns = {"__name__": "pico-console"}
         try:
             writer.write(("OpenTherm Pico debug console (persistent namespace).\n"
-                          "Type Python lines; 'exit' to quit.\n").encode())
+                          "Type Python lines; 'exit' to quit.\n" +
+                          END_MARKER + "\n").encode())
             await writer.drain()
             while True:
                 line = await reader.readline()
@@ -220,17 +219,25 @@ class NetService:
 
     @staticmethod
     def _eval_line(text, ns):
-        old = sys.stdout
-        buf = io.StringIO()
-        sys.stdout = buf
+        output = []
+
+        def console_print(*values, **kwargs):
+            sep = kwargs.get("sep", " ")
+            end = kwargs.get("end", "\n")
+            output.append(sep.join(str(value) for value in values) + end)
+
+        ns["print"] = console_print
         err_text = ""
         try:
             try:
+                result = eval(text, ns)
+            except SyntaxError:
                 exec(text, ns)
-            except Exception as e:
-                errbuf = io.StringIO()
-                sys.print_exception(e, file=errbuf)
-                err_text = errbuf.getvalue()
-        finally:
-            sys.stdout = old
-        return buf.getvalue(), err_text
+                result = None
+            if result is not None:
+                output.append(repr(result) + "\n")
+        except Exception as e:
+            errbuf = io.StringIO()
+            sys.print_exception(e, file=errbuf)
+            err_text = errbuf.getvalue()
+        return "".join(output), err_text

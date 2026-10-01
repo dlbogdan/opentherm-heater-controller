@@ -1,6 +1,6 @@
 #!/bin/sh
 # End-to-end firmware deploy: bump version -> build -> serve -> reset board ->
-# wait for OTA promotion -> run the on-device self-test. One command.
+# wait for OTA promotion -> run the on-device self-test -> restart the app.
 #
 #   tools/deploy.sh                 # auto-bump patch of app/version.txt
 #   tools/deploy.sh 1.2.0           # use an explicit MAJOR.MINOR.PATCH
@@ -88,4 +88,9 @@ echo "==> Promoted: version=$V active_slot=$ACTIVE"
 # --- 6. Verify with the on-device self-test ------------------------------------
 echo "==> Running on-device self-test"
 tools/device.py selftest
-echo "==> DEPLOY OK: $VERSION is active and passing its self-test."
+
+# Entering raw REPL for the self-test interrupts the running application. Reset
+# once more so deploy always leaves the device in normal autonomous operation.
+echo "==> Restarting application after USB self-test"
+tools/device.py reset || true
+echo "==> DEPLOY OK: $VERSION is active, tested, and restarting."

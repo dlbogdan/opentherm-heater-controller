@@ -58,8 +58,18 @@ def run():
     c.ok("heat: t<=t_design -> flow_design",
          abs(base_flow(-25, p["t_off"], p["t_design"], p["flow_design"],
                        p["curve_base"], p["b"]) - p["flow_design"]) < _EPS)
-    warm = base_flow(-5, p["t_off"], p["t_design"], p["flow_design"], p["curve_base"], p["b"])
-    cold = base_flow(-15, p["t_off"], p["t_design"], p["flow_design"], p["curve_base"], p["b"])
+    warm = base_flow(-5,
+                     p["t_off"],
+                     p["t_design"],
+                     p["flow_design"],
+                     p["curve_base"],
+                     p["b"])
+    cold = base_flow(-15,
+                     p["t_off"],
+                     p["t_design"],
+                     p["flow_design"],
+                     p["curve_base"],
+                     p["b"])
     c.ok("heat: colder -> higher flow (monotonic)", cold > warm)
 
     # -- Solar: dark -> 0 offset; full sun -> clamped to max; decays ----------
