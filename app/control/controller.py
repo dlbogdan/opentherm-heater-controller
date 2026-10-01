@@ -21,7 +21,8 @@ class Decision:
     """A logical control outcome (the transport turns this into physical writes)."""
 
     def __init__(self, action, target=None, heating_on=False, base_flow=None,
-                 solar_offset=0.0, demand_offset=0.0, reason=""):
+                 solar_offset=0.0, demand_offset=0.0, reason="",
+                 release_override=False):
         self.action = action            # "skip" | "off" | "heat"
         self.target = target            # clamped flow to send (°C) or off_sentinel
         self.heating_on = heating_on
@@ -29,6 +30,7 @@ class Decision:
         self.solar_offset = solar_offset
         self.demand_offset = demand_offset
         self.reason = reason
+        self.release_override = bool(release_override)
 
     def __repr__(self):
         return ("Decision(action=%s target=%s heating_on=%s base=%s "
@@ -110,7 +112,8 @@ class Controller:
                             base_flow=bf, solar_offset=solar_off,
                             demand_offset=dem_off,
                             reason=("release override" if mode_changed
-                                    else "setpoint reset"))
+                            else "setpoint reset"),
+                        release_override=mode_changed)
 
         sent_target = frost_clamp(target, t_out)
         self.last_sent_flow = sent_target
