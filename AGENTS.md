@@ -113,12 +113,17 @@ away):
 - **macOS `cp` fails on the bootrom volume** ("could not copy extended
   attributes ... Attribute not found") because it copies xattrs onto an
   MS-DOS volume. Use a plain byte copy (`cat uf2 > volume/uf2`).
-- **Uploads can race a board that is booting on its own.** A soft reset or USB
-  blip mid-upload leaves the board running `boot.py` while mpremote is still
-  copying; `enter_raw_repl` then fails ("could not enter raw repl") and the
-  serial buffer dumps the whole boot/OTA sequence. Also, an `mpremote cp` can
-  exit 0 while the file never lands (a transient `Device not configured` in
-  the disconnect handshake). Consequences baked into the script:
+- **Every new mpremote process auto-soft-resets by default.** On its first
+  filesystem/exec command it sends Ctrl-C, enters raw REPL, then sends Ctrl-D;
+  MicroPython runs `boot.py` before returning to raw REPL. After provisioning
+  uploaded the Wi-Fi/OTA config but not `/version.txt`, the next `cp` therefore
+  started `boot.py`, which saw version `0.0.0` and performed a full OTA update.
+  It did not return before mpremote's timeout, producing "could not enter raw
+  repl" plus a serial dump of the OTA sequence. All provisioning operations
+  now use `connect <port> resume ...`, including explicit reset/bootloader
+  shortcuts, so only intentional hard resets boot the board. Also, an
+  `mpremote cp` can exit 0 while the file never lands (a transient `Device not
+  configured` in the disconnect handshake). Consequences baked into the script:
   `/version.txt` is uploaded **last** and its `cp` is tolerant (read-back
   verify, 3 retries, warn — never abort). Ordering matters: a board that boots
   early with `/version.txt` **missing** sees `0.0.0` and pulls the full

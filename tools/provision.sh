@@ -143,7 +143,7 @@ if [ -n "$VOLUME" ]; then
 else
     if [ -n "$PORT" ] && [ -c "$PORT" ]; then
         echo "    board running on $PORT -- kicking it into the bootloader"
-        "$MPREMOTE" connect "$PORT" bootloader >/dev/null 2>&1 || true
+        "$MPREMOTE" connect "$PORT" resume bootloader >/dev/null 2>&1 || true
     else
         echo ""
         echo "    No serial port visible. Plug the Pico in with BOOTSEL held"
@@ -196,7 +196,7 @@ sleep 1  # let USB-CDC settle
 # launcher before the app can log. Wipe the data FS with the framework's
 # format recipe (micropy-system/src/lib/coresys/format.py).
 echo "==> Formatting the data filesystem (wipes old apps/state/config)"
-"$MPREMOTE" connect "$PORT" exec "
+"$MPREMOTE" connect "$PORT" resume exec "
 from rp2 import Flash
 from os import umount, mount, VfsLfs2
 flash = Flash()
@@ -227,7 +227,7 @@ echo "==> Uploading device tree"
 # the tree at the filesystem root.
 for item in "$STAGE"/*; do
     [ -e "$item" ] || continue
-    "$MPREMOTE" connect "$PORT" cp -r -f "$item" :/
+    "$MPREMOTE" connect "$PORT" resume cp -r -f "$item" :/
 done
 echo "==> Resolving system-config.json (local file or example base; --ssid/--pass win)"
 "$PYTHON" - "$CONFIG_SRC" "$CONFIG_OUT" "$SSID_ARG" "$PASS_ARG" "update-source.json" <<'PY'
@@ -285,7 +285,7 @@ if not w.get("SSID"):
     print("    NOTE: WIFI.SSID is empty -- the board will boot offline.")
 PY
 echo "==> Uploading system-config.json"
-"$MPREMOTE" connect "$PORT" cp -f "$CONFIG_OUT" :/system-config.json
+"$MPREMOTE" connect "$PORT" resume cp -f "$CONFIG_OUT" :/system-config.json
 
 # --- Upload the app version LAST ----------------------------------------------------
 # Deliberately last: if the board boots early mid-provision (a soft reset,
@@ -301,8 +301,8 @@ if [ -f app/version.txt ]; then
     EXPECTED=$(tr -d '[:space:]' < app/version.txt)
     GOT=""
     for attempt in 1 2 3; do
-        "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt || true
-        GOT=$("$MPREMOTE" connect "$PORT" cat :/version.txt 2>/dev/null | tr -d '[:space:]') || GOT=""
+        "$MPREMOTE" connect "$PORT" resume cp -f app/version.txt :/version.txt || true
+        GOT=$("$MPREMOTE" connect "$PORT" resume cat :/version.txt 2>/dev/null | tr -d '[:space:]') || GOT=""
         [ "$GOT" = "$EXPECTED" ] && break
         echo "    version.txt read-back mismatch (attempt $attempt), retrying..."
         sleep 2
@@ -323,9 +323,9 @@ deadline=$(( $(date +%s) + 90 ))
 OK=0
 LOG=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    "$MPREMOTE" connect "$PORT" reset >/dev/null 2>&1 || true
+    "$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
     sleep 12
-    LOG=$("$MPREMOTE" connect "$PORT" cat :/log.txt 2>/dev/null | tail -30) || LOG=""
+    LOG=$("$MPREMOTE" connect "$PORT" resume cat :/log.txt 2>/dev/null | tail -30) || LOG=""
     case "$LOG" in
         *"entering main loop"*) OK=1; break ;;
     esac
@@ -339,7 +339,7 @@ echo "==> App booted and reached the main loop"
 
 # --- Final reset: restore autonomous execution ---------------------------------------
 echo "==> Final reset (restores autonomous execution)"
-"$MPREMOTE" connect "$PORT" reset >/dev/null 2>&1 || true
+"$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
 
 # --- Confirm network autonomy (best effort; only if an SSID was configured) ----------
 FINAL_SSID=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("WIFI",{}).get("SSID","") or "")' "$CONFIG_OUT" 2>/dev/null) || FINAL_SSID=""
