@@ -352,6 +352,11 @@ echo "==> App booted and reached the main loop"
 DETECTED_IP=$(printf '%s\n' "$LOG" | sed -n \
     -e 's/.*Connected to .* (\([0-9][0-9.]*\)).*/\1/p' \
     -e 's/.*IP Addr:\([0-9][0-9.]*\).*/\1/p' | tail -1)
+if [ -n "$DETECTED_IP" ]; then
+    echo "==> Board reported DHCP address: $DETECTED_IP"
+else
+    echo "    note: no DHCP address appeared in the USB boot log"
+fi
 
 # --- Final reset: restore autonomous execution ---------------------------------------
 echo "==> Final reset (restores autonomous execution)"
