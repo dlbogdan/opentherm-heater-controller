@@ -52,8 +52,8 @@ experiment.
 ## Blank / corrupted Pico provisioning
 
 `tools/provision.sh` flashes a blank or corrupted board entirely over USB
-(no network needed). It re-flashes the pinned MicroPython 1.29.0 UF2 (fresh
-filesystem), uploads the assembled device tree, and uploads a resolved
+(no network needed). It re-flashes the pinned MicroPython 1.29.0 UF2, formats
+the data LFS for a true reset, uploads the assembled device tree, and uploads a resolved
 `system-config.json` — the local (gitignored) file if present, else a default
 generated from `system-config.example.json`. It verifies the app reaches its
 main loop over USB, then performs the required final reset:
@@ -70,6 +70,23 @@ The tool handles all three board states: bootrom volume already mounted, a
 running-but-corrupt board (kicked into BOOTSEL via `mpremote bootloader`), or
 a blank board (prompts to hold BOOTSEL). Without Wi-Fi credentials the board
 is provisioned offline and the script says so.
+
+Verified-on-device pitfalls the tool works around (do not "simplify" them
+away):
+
+- **A UF2 flash does NOT erase the data LFS.** The LittleFS data partition
+  (old apps, `ota-state.json`, configs, logs) survives the firmware flash.
+  Provisioning therefore formats the data FS explicitly with the framework
+  recipe (`micropy-system/src/lib/coresys/format.py`:
+  `Flash()` → `umount('/')` → `VfsLfs2.mkfs(flash)` → `mount(flash, '/')`).
+  A stale `ota-state.json` pointing at a slot that is not uploaded crashes
+  the A/B launcher before the app can log.
+- **`mpremote cp -r <dir> <dest>` copies the directory under its own name**
+  (`dest/basename(dir)`), not its contents. To populate the filesystem root,
+  copy each top-level entry individually.
+- **macOS `cp` fails on the bootrom volume** ("could not copy extended
+  attributes ... Attribute not found") because it copies xattrs onto an
+  MS-DOS volume. Use a plain byte copy (`cat uf2 > volume/uf2`).
 
 ## Firmware entry and A/B layout
 

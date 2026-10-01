@@ -2,17 +2,18 @@
 # Full USB provisioning of a BLANK or CORRUPTED Pico -- no network needed.
 #
 # What it does, in order:
-#   1. Re-flash the pinned MicroPython 1.29.0 firmware (UF2) -- this also
-#      gives the board a factory-fresh filesystem, which is the recovery
-#      path for a corrupt board.
-#   2. Clean any leftover state, then upload the assembled device tree
-#      (boot.py, A/B selector, framework libs, initial app in slot A).
-#   3. Upload a resolved system-config.json: the local (gitignored)
+#   1. Re-flash the pinned MicroPython 1.29.0 firmware (UF2).
+#   2. Format the data LFS -- a UF2 flash only rewrites the firmware region;
+#      the LittleFS data partition (old apps, ota-state.json, configs)
+#      SURVIVES it, so the board is explicitly formatted for a true reset.
+#   3. Upload the assembled device tree (boot.py, A/B selector, framework
+#      libs, initial app in slot A).
+#   4. Upload a resolved system-config.json: the local (gitignored)
 #      system-config.json if present, otherwise a default generated from
 #      system-config.example.json. --ssid / --pass always win for WIFI.
-#   4. Reset, verify the app reached its main loop (over USB), then perform
+#   5. Reset, verify the app reached its main loop (over USB), then perform
 #      the required final reset so the device is left autonomous.
-#   5. If an SSID was configured and the device IP is known, confirm the
+#   6. If an SSID was configured and the device IP is known, confirm the
 #      board comes up on Wi-Fi.
 #
 # Usage:
@@ -153,9 +154,15 @@ else
     fi
 fi
 
-# --- Flash (wipes the board; fresh filesystem) ----------------------------------
-echo "==> Flashing firmware (factory-fresh filesystem)"
-cp -f "$UF2_FILE" "$VOLUME/"
+# --- Flash (firmware region only; the data LFS is wiped in the next step) ----------
+# Plain byte copy, NOT cp: macOS cp tries to copy extended attributes onto the
+# MS-DOS bootrom volume and fails ("could not copy extended attributes ...
+# Attribute not found"). A just-mounted volume can also deny the first write,
+# so give it a moment to settle.
+echo "==> Flashing firmware (code partition only)"
+rm -f "$VOLUME/$(basename "$UF2_FILE")" 2>/dev/null || true
+sleep 1
+cat "$UF2_FILE" > "$VOLUME/$(basename "$UF2_FILE")"
 sync
 if command -v diskutil >/dev/null 2>&1; then
     diskutil eject "$VOLUME" >/dev/null 2>&1 || true
@@ -179,11 +186,22 @@ fi
 echo "==> Serial port: $PORT"
 sleep 1  # let USB-CDC settle
 
-# --- Clean leftover state (corrupt-board recovery) ---------------------------------
-echo "==> Cleaning leftover state"
-"$MPREMOTE" connect "$PORT" fs rm -r :/apps/b 2>/dev/null || true
-"$MPREMOTE" connect "$PORT" fs rm :/ota-state.json 2>/dev/null || true
-"$MPREMOTE" connect "$PORT" fs rm :/log.txt 2>/dev/null || true
+# --- Format the data LFS (true factory reset) ----------------------------------------
+# A UF2 flash does NOT erase the LittleFS data partition: old apps, the A/B
+# ota-state.json, logs and configs all survive it (verified on-device). A
+# stale ota-state pointing at a slot we did not upload then crashes the
+# launcher before the app can log. Wipe the data FS with the framework's
+# format recipe (micropy-system/src/lib/coresys/format.py).
+echo "==> Formatting the data filesystem (wipes old apps/state/config)"
+"$MPREMOTE" connect "$PORT" exec "
+from rp2 import Flash
+from os import umount, mount, VfsLfs2
+flash = Flash()
+umount('/')
+VfsLfs2.mkfs(flash)
+mount(flash, '/')
+print('LFS formatted')
+"
 
 # --- Upload the device tree (clean staging copy) -----------------------------------
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/otc-provision.XXXXXX")
@@ -201,7 +219,13 @@ def ignore(directory, names):
 shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True)
 PY
 echo "==> Uploading device tree"
-"$MPREMOTE" connect "$PORT" cp -r -f "$STAGE/" :/
+# mpremote cp -r <dir> <dest> copies the directory UNDER ITS OWN NAME
+# (dest/basename(dir)), so copy each top-level entry individually to land
+# the tree at the filesystem root.
+for item in "$STAGE"/*; do
+    [ -e "$item" ] || continue
+    "$MPREMOTE" connect "$PORT" cp -r -f "$item" :/
+done
 echo "==> Resolving system-config.json (local file or example base; --ssid/--pass win)"
 "$PYTHON" - "$CONFIG_SRC" "$CONFIG_OUT" "$SSID_ARG" "$PASS_ARG" <<'PY'
 import json, sys
