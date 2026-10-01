@@ -206,6 +206,14 @@ mount(flash, '/')
 print('LFS formatted')
 "
 
+# The live interpreter still holds VFS state from before mkfs. Reusing that
+# mount can fail recursive mkdir/listdir with ENOENT or EILSEQ (errno 84).
+# Reset now so MicroPython mounts the fresh LFS cleanly. The filesystem is
+# empty at this point, so there is no /boot.py or /main.py to execute.
+echo "==> Resetting once to remount the fresh filesystem"
+"$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
+sleep 3
+
 # --- Upload the device tree (clean staging copy) -----------------------------------
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/otc-provision.XXXXXX")
 CONFIG_OUT="${TMPDIR:-/tmp}/otc-provision-config.json"
@@ -337,6 +345,14 @@ if [ "$OK" -ne 1 ]; then
 fi
 echo "==> App booted and reached the main loop"
 
+# The boot log belongs to this physical board and normally contains its DHCP
+# address (from either WiFiManager's "Connected to ... (IP)" line or the
+# framework's "IP Addr:IP" line). Capture it before the final reset; a
+# project-level .otc-device-ip may refer to a different Pico entirely.
+DETECTED_IP=$(printf '%s\n' "$LOG" | sed -n \
+    -e 's/.*Connected to .* (\([0-9][0-9.]*\)).*/\1/p' \
+    -e 's/.*IP Addr:\([0-9][0-9.]*\).*/\1/p' | tail -1)
+
 # --- Final reset: restore autonomous execution ---------------------------------------
 echo "==> Final reset (restores autonomous execution)"
 "$MPREMOTE" connect "$PORT" resume reset >/dev/null 2>&1 || true
@@ -349,8 +365,8 @@ if [ -z "$FINAL_SSID" ]; then
     exit 0
 fi
 IP="${OTC_IP:-}"
-if [ -z "$IP" ] && [ -f .otc-device-ip ]; then
-    IP=$(tr -d '[:space:]' < .otc-device-ip)
+if [ -z "$IP" ]; then
+    IP="$DETECTED_IP"
 fi
 if [ -n "$IP" ]; then
     BASE="http://$IP:8080"
@@ -365,6 +381,7 @@ if [ -n "$IP" ]; then
         sleep 3
     done
     if [ "$OK" = 1 ]; then
+        printf '%s\n' "$IP" > .otc-device-ip
         echo "==> PROVISION OK: $BOARD is autonomous at $BASE"
         exit 0
     fi

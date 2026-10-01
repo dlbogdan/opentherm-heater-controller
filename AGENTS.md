@@ -105,6 +105,9 @@ away):
   Provisioning therefore formats the data FS explicitly with the framework
   recipe (`micropy-system/src/lib/coresys/format.py`:
   `Flash()` → `umount('/')` → `VfsLfs2.mkfs(flash)` → `mount(flash, '/')`).
+  The live interpreter must then hard-reset before any upload so MicroPython
+  remounts the new LFS cleanly; using that mount in-place produced recursive
+  mkdir `ENOENT`, followed by `EILSEQ` (errno 84) even from `listdir('/')`.
   A stale `ota-state.json` pointing at a slot that is not uploaded crashes
   the A/B launcher before the app can log.
 - **`mpremote cp -r <dir> <dest>` copies the directory under its own name**
@@ -131,6 +134,11 @@ away):
   converged exactly this way). A board that boots early with `/version.txt`
   **present** but an incomplete tree is "up-to-date" and left app-less, so the
   version file must never precede the tree.
+- **Provisioning a new board must not trust `.otc-device-ip`.** That file may
+  identify another Pico. Before its final USB reset, provisioning extracts the
+  new board's DHCP address from its own boot log; only successful HTTP
+  validation writes that address to `.otc-device-ip`. `OTC_IP` remains an
+  explicit override.
 
 ## Firmware entry and A/B layout
 
