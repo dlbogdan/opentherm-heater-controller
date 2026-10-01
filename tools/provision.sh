@@ -352,18 +352,22 @@ if [ "$OK" -ne 1 ]; then
 fi
 echo "==> App booted and reached the main loop"
 
-# The boot log belongs to this physical board and normally contains its DHCP
-# address (from either WiFiManager's "Connected to ... (IP)" line or the
-# framework's "IP Addr:IP" line). Capture it before the final reset; a
-# project-level .otc-device-ip may refer to a different Pico entirely.
-DETECTED_IP=$(printf '%s\n' "$LOG" | sed -n \
-    -e 's/.*Connected to .* (\([0-9][0-9.]*\)).*/\1/p' \
-    -e 's/.*IP Addr:\([0-9][0-9.]*\).*/\1/p' | tail -1)
-if [ -n "$DETECTED_IP" ]; then
+# Reading the log above interrupted the app but did not reset the interpreter
+# or WLAN interface. Query this physical board's live DHCP address directly
+# before the final reset; serial-only WiFiManager messages are not persisted in
+# /log.txt, and .otc-device-ip may identify a different Pico.
+DETECTED_IP=$("$MPREMOTE" connect "$PORT" resume exec \
+    "import network; print(network.WLAN(network.STA_IF).ifconfig()[0])" \
+    2>/dev/null | tr -d '\r' | tail -1) || DETECTED_IP=""
+case "$DETECTED_IP" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
     echo "==> Board reported DHCP address: $DETECTED_IP"
-else
-    echo "    note: no DHCP address appeared in the USB boot log"
-fi
+    ;;
+    *)
+        DETECTED_IP=""
+        echo "    note: the board did not report a DHCP address before reset"
+    ;;
+esac
 
 # --- Final reset: restore autonomous execution ---------------------------------------
 echo "==> Final reset (restores autonomous execution)"

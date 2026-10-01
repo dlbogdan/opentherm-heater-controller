@@ -137,10 +137,12 @@ away):
   **present** but an incomplete tree is "up-to-date" and left app-less, so the
   version file must never precede the tree.
 - **Provisioning a new board must not trust `.otc-device-ip`.** That file may
-  identify another Pico. Before its final USB reset, provisioning extracts the
-  new board's DHCP address from its own boot log; only successful HTTP
-  validation writes that address to `.otc-device-ip`. `OTC_IP` remains an
-  explicit override.
+  identify another Pico. After the app reaches its main loop and the USB log
+  read interrupts it, provisioning queries the live WLAN interface directly
+  (`network.WLAN(network.STA_IF).ifconfig()[0]`) before its final USB reset.
+  Serial-only DHCP messages are not persisted in `/log.txt`, so parsing that
+  file is unreliable. Only successful HTTP validation writes the address to
+  `.otc-device-ip`. `OTC_IP` remains an explicit override.
 
 ## Firmware entry and A/B layout
 
