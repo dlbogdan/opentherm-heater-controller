@@ -113,13 +113,19 @@ away):
 - **macOS `cp` fails on the bootrom volume** ("could not copy extended
   attributes ... Attribute not found") because it copies xattrs onto an
   MS-DOS volume. Use a plain byte copy (`cat uf2 > volume/uf2`).
-- **An `mpremote cp` can report success while the file never lands** (a
-  transient `Device not configured` was observed in the disconnect handshake).
-  The script therefore read-verifies `/version.txt` after upload and retries
-  once. If `/version.txt` is absent at boot the updater logs
-  "Version file not found, defaulting to 0.0.0" and the board self-heals by
-  downloading the current firmware from its OTA source — harmless, but the
-  read-back check is there to avoid relying on that.
+- **Uploads can race a board that is booting on its own.** A soft reset or USB
+  blip mid-upload leaves the board running `boot.py` while mpremote is still
+  copying; `enter_raw_repl` then fails ("could not enter raw repl") and the
+  serial buffer dumps the whole boot/OTA sequence. Also, an `mpremote cp` can
+  exit 0 while the file never lands (a transient `Device not configured` in
+  the disconnect handshake). Consequences baked into the script:
+  `/version.txt` is uploaded **last** and its `cp` is tolerant (read-back
+  verify, 3 retries, warn — never abort). Ordering matters: a board that boots
+  early with `/version.txt` **missing** sees `0.0.0` and pulls the full
+  firmware package from its OTA source — a proven self-heal (both field boards
+  converged exactly this way). A board that boots early with `/version.txt`
+  **present** but an incomplete tree is "up-to-date" and left app-less, so the
+  version file must never precede the tree.
 
 ## Firmware entry and A/B layout
 

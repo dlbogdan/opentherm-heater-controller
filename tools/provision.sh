@@ -286,21 +286,31 @@ if not w.get("SSID"):
 PY
 echo "==> Uploading system-config.json"
 "$MPREMOTE" connect "$PORT" cp -f "$CONFIG_OUT" :/system-config.json
+
+# --- Upload the app version LAST ----------------------------------------------------
+# Deliberately last: if the board boots early mid-provision (a soft reset,
+# a USB blip), a MISSING /version.txt makes its OTA check see 0.0.0 and pull
+# the full firmware package -- a proven self-heal (both boards in the field
+# converged this way). A PRESENT version file with an incomplete tree would
+# instead leave it "up-to-date" and app-less, so we keep this file last.
+# The board can also be busy booting at this moment, so tolerate a failed cp
+# (verify by read-back, warn instead of aborting); the tree/config uploads
+# above still hard-fail, as they must.
+echo "==> Uploading version.txt (last, so an early boot can self-heal via OTA)"
 if [ -f app/version.txt ]; then
-    # Verify the read-back: a silently lost upload makes the board believe it is
-    # version 0.0.0 on first boot (it then self-heals via an OTA download, but we
-    # prefer the known-good file to actually be there).
     EXPECTED=$(tr -d '[:space:]' < app/version.txt)
-    for attempt in 1 2; do
-        "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt
+    GOT=""
+    for attempt in 1 2 3; do
+        "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt || true
         GOT=$("$MPREMOTE" connect "$PORT" cat :/version.txt 2>/dev/null | tr -d '[:space:]') || GOT=""
         [ "$GOT" = "$EXPECTED" ] && break
         echo "    version.txt read-back mismatch (attempt $attempt), retrying..."
+        sleep 2
     done
     if [ "$GOT" != "$EXPECTED" ]; then
         echo "WARNING: /version.txt could not be verified on the board (expected $EXPECTED)." >&2
-        echo "    The board will detect this as 0.0.0 on first boot and pull the" >&2
-        echo "    current firmware from its configured OTA source." >&2
+        echo "    A first boot will treat the board as 0.0.0 and pull the current" >&2
+        echo "    firmware from its OTA source; that self-heals (verified on-device)." >&2
     fi
 fi
 
