@@ -49,6 +49,28 @@ Commit after each logical, device-verified step. Do not include unrelated
 working-tree changes; `tools/capture_boot.py` may exist as an untracked local
 experiment.
 
+## Blank / corrupted Pico provisioning
+
+`tools/provision.sh` flashes a blank or corrupted board entirely over USB
+(no network needed). It re-flashes the pinned MicroPython 1.29.0 UF2 (fresh
+filesystem), uploads the assembled device tree, and uploads a resolved
+`system-config.json` — the local (gitignored) file if present, else a default
+generated from `system-config.example.json`. It verifies the app reaches its
+main loop over USB, then performs the required final reset:
+
+```sh
+tools/provision.sh                                  # Pico 2 W (RP2350)
+tools/provision.sh --board pico-w                   # Pico W (RP2040)
+tools/provision.sh --ssid "MyNet" --pass "secret"   # Wi-Fi creds as args;
+                                                    # works with no local config
+```
+
+The UF2 is pinned (`micropython.org`, `v1.29.0`) and cached under `.cache/`.
+The tool handles all three board states: bootrom volume already mounted, a
+running-but-corrupt board (kicked into BOOTSEL via `mpremote bootloader`), or
+a blank board (prompts to hold BOOTSEL). Without Wi-Fi credentials the board
+is provisioned offline and the script says so.
+
 ## Firmware entry and A/B layout
 
 - Source entry point: `app/main.py`, exposing `async def main()`.

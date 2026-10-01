@@ -13,3 +13,4 @@ build/
 release/
 system-config.json
 .otc-device-ip
+.cache/

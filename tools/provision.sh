@@ -1,0 +1,290 @@
+#!/bin/sh
+# Full USB provisioning of a BLANK or CORRUPTED Pico -- no network needed.
+#
+# What it does, in order:
+#   1. Re-flash the pinned MicroPython 1.29.0 firmware (UF2) -- this also
+#      gives the board a factory-fresh filesystem, which is the recovery
+#      path for a corrupt board.
+#   2. Clean any leftover state, then upload the assembled device tree
+#      (boot.py, A/B selector, framework libs, initial app in slot A).
+#   3. Upload a resolved system-config.json: the local (gitignored)
+#      system-config.json if present, otherwise a default generated from
+#      system-config.example.json. --ssid / --pass always win for WIFI.
+#   4. Reset, verify the app reached its main loop (over USB), then perform
+#      the required final reset so the device is left autonomous.
+#   5. If an SSID was configured and the device IP is known, confirm the
+#      board comes up on Wi-Fi.
+#
+# Usage:
+#   tools/provision.sh                    # Pico 2 W (RP2350) -- default
+#   tools/provision.sh --board pico-w     # Pico W (RP2040)
+#   tools/provision.sh --ssid "MyNet" --pass "secret"
+#                                         # set Wi-Fi credentials directly; works
+#                                         # even with no local system-config.json
+#   SERIAL_PORT=/dev/cu.usbmodemXXX tools/provision.sh   # explicit port
+#
+# Board state handling: if the RPI-RP2 bootrom volume is already mounted
+# (blank board in BOOTSEL) we flash directly. If the board is running but
+# corrupt, mpremote kicks it into its bootloader. Otherwise it asks you to
+# plug it in with BOOTSEL held.
+#
+# Requires: tools/setup_build_env.sh run once, mpremote + pyserial in .venv,
+# and either a local system-config.json or --ssid/--pass (the example template
+# is the fallback base for the device config).
+set -eu
+
+APP_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$APP_ROOT"
+PYTHON="$APP_ROOT/.venv/bin/python"
+MPREMOTE="$APP_ROOT/.venv/bin/mpremote"
+PORT="${SERIAL_PORT:-}"
+BOARD="pico2-w"
+CACHE_DIR="$APP_ROOT/.cache/uf2"
+STAGE=""
+
+# --- Args ----------------------------------------------------------------------
+SSID_ARG=""
+PASS_ARG=""
+PENDING=""
+for arg in "$@"; do
+    if [ -n "$PENDING" ]; then
+        case "$PENDING" in
+            ssid) SSID_ARG="$arg" ;;
+            pass) PASS_ARG="$arg" ;;
+        esac
+        PENDING=""
+        continue
+    fi
+    case "$arg" in
+        --board) : ;;
+        pico2-w|pico-w) BOARD="$arg" ;;
+        --ssid) PENDING=ssid ;;
+        --pass) PENDING=pass ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        *) echo "Error: unknown argument '$arg' (try --help)" >&2; exit 2 ;;
+    esac
+done
+
+case "$BOARD" in
+    pico2-w) UF2_NAME="RPI_PICO2_W-20260824-v1.29.0.uf2" ;;
+    pico-w)  UF2_NAME="RPI_PICO_W-20260824-v1.29.0.uf2" ;;
+    *) echo "Error: unknown board '$BOARD' (use pico2-w or pico-w)" >&2; exit 2 ;;
+esac
+UF2_URL="https://micropython.org/resources/firmware/$UF2_NAME"
+UF2_FILE="$CACHE_DIR/$UF2_NAME"
+
+# --- Preflight -----------------------------------------------------------------
+if [ ! -x "$MPREMOTE" ]; then
+    echo "Error: mpremote not found in .venv." >&2
+    echo "Run: tools/setup_build_env.sh && .venv/bin/pip install mpremote pyserial" >&2
+    exit 2
+fi
+# --- Resolve the base for the device system-config.json ------------------------
+# Always provision a working config: prefer the local (gitignored) file, else
+# generate a default from the example template. --ssid/--pass override the
+# WIFI section in both cases, so a blank Pico can be fully provisioned with:
+#   tools/provision.sh --ssid "MyNet" --pass "secret"
+if [ -f system-config.json ]; then
+    CONFIG_SRC="system-config.json"
+elif [ -f system-config.example.json ]; then
+    CONFIG_SRC="system-config.example.json"
+    echo "==> No local system-config.json -- using the example template as the"
+    echo "    base for the device config (Wi-Fi from --ssid/--pass if given)."
+else
+    echo "Error: neither system-config.json nor system-config.example.json found." >&2
+    exit 2
+fi
+echo "==> Assembling a fresh device tree"
+"$PYTHON" tools/assemble.py >/dev/null
+[ -f device/boot.py ] && [ -f device/main.py ] \
+    || { echo "Error: device/ tree missing after assemble.py" >&2; exit 2; }
+echo "==> Device tree ready (board: $BOARD)"
+
+# --- Firmware UF2 (pinned, cached) ----------------------------------------------
+mkdir -p "$CACHE_DIR"
+UF2_SIZE=0
+[ -f "$UF2_FILE" ] && UF2_SIZE=$(wc -c < "$UF2_FILE" | tr -d '[:space:]')
+if [ "$UF2_SIZE" -lt 200000 ]; then
+    echo "==> Downloading MicroPython 1.29.0 firmware ($BOARD)"
+    curl -fL --max-time 300 -o "$UF2_FILE" "$UF2_URL" \
+        || { echo "Error: firmware download failed: $UF2_URL" >&2; exit 1; }
+fi
+echo "==> Firmware: $UF2_FILE ($(wc -c < "$UF2_FILE" | tr -d '[:space:]') bytes)"
+
+# --- Enter BOOTSEL (bootrom mass-storage) ----------------------------------------
+find_volume() {
+    for v in "/Volumes/RPI-RP2" "/Volumes/RP2350"; do
+        [ -d "$v" ] && { echo "$v"; return 0; }
+    done
+    return 1
+}
+find_port() {
+    ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* 2>/dev/null | head -1
+}
+wait_volume() {
+    # $1 = seconds to wait
+    deadline=$(( $(date +%s) + $1 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        VOLUME=$(find_volume) || VOLUME=""
+        [ -n "$VOLUME" ] && return 0
+        sleep 1
+    done
+    return 1
+}
+
+echo "==> Waiting for the RPI-RP2 bootrom volume (board in BOOTSEL)..."
+VOLUME=$(find_volume) || VOLUME=""
+if [ -n "$VOLUME" ]; then
+    echo "    volume already mounted: $VOLUME"
+else
+    if [ -n "$PORT" ] && [ -c "$PORT" ]; then
+        echo "    board running on $PORT -- kicking it into the bootloader"
+        "$MPREMOTE" connect "$PORT" bootloader >/dev/null 2>&1 || true
+    else
+        echo ""
+        echo "    No serial port visible. Plug the Pico in with BOOTSEL held"
+        echo "    (small button; LED stays RED) so it mounts as a USB drive."
+    fi
+    if wait_volume 180; then
+        echo "    volume: $VOLUME"
+    else
+        echo "Error: no RPI-RP2 volume appeared within 180s." >&2
+        exit 1
+    fi
+fi
+
+# --- Flash (wipes the board; fresh filesystem) ----------------------------------
+echo "==> Flashing firmware (factory-fresh filesystem)"
+cp -f "$UF2_FILE" "$VOLUME/"
+sync
+if command -v diskutil >/dev/null 2>&1; then
+    diskutil eject "$VOLUME" >/dev/null 2>&1 || true
+elif command -v umount >/dev/null 2>&1; then
+    umount "$VOLUME" >/dev/null 2>&1 || true
+fi
+echo "==> Ejected; board should now boot MicroPython"
+
+# --- Wait for the serial port -----------------------------------------------------
+PORT=""
+deadline=$(( $(date +%s) + 120 ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    PORT=$(find_port) || PORT=""
+    [ -n "$PORT" ] && break
+    sleep 1
+done
+if [ -z "$PORT" ]; then
+    echo "Error: the board's serial port never appeared." >&2
+    exit 1
+fi
+echo "==> Serial port: $PORT"
+sleep 1  # let USB-CDC settle
+
+# --- Clean leftover state (corrupt-board recovery) ---------------------------------
+echo "==> Cleaning leftover state"
+"$MPREMOTE" connect "$PORT" fs rm -r :/apps/b 2>/dev/null || true
+"$MPREMOTE" connect "$PORT" fs rm :/ota-state.json 2>/dev/null || true
+"$MPREMOTE" connect "$PORT" fs rm :/log.txt 2>/dev/null || true
+
+# --- Upload the device tree (clean staging copy) -----------------------------------
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/otc-provision.XXXXXX")
+CONFIG_OUT="${TMPDIR:-/tmp}/otc-provision-config.json"
+cleanup() { [ -n "$STAGE" ] && rm -rf "$STAGE"; rm -f "${CONFIG_OUT:-}"; }
+trap cleanup EXIT
+echo "==> Staging a clean copy (drops __pycache__ / *.pyc / markers)"
+"$PYTHON" - device "$STAGE" <<'PY'
+import shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+def ignore(directory, names):
+    return {n for n in names
+            if n == "__pycache__" or n.endswith(".pyc") or n == ".DS_Store"
+            or n == ".micropy-system-device-tree"}
+shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True)
+PY
+echo "==> Uploading device tree"
+"$MPREMOTE" connect "$PORT" cp -r -f "$STAGE/" :/
+echo "==> Resolving system-config.json (local file or example base; --ssid/--pass win)"
+"$PYTHON" - "$CONFIG_SRC" "$CONFIG_OUT" "$SSID_ARG" "$PASS_ARG" <<'PY'
+import json, sys
+src, dst, ssid, passwd = sys.argv[1:5]
+with open(src) as f:
+    cfg = json.load(f)
+dev = cfg.setdefault("DEVICE", {})
+if not dev.get("NAME") or dev.get("NAME") == "micropy-system-test":
+    dev["NAME"] = "otc"
+w = cfg.setdefault("WIFI", {})
+if ssid:
+    w["SSID"] = ssid
+if passwd:
+    w["PASS"] = passwd
+if w.get("SSID") == "your-wifi-ssid":   # example placeholder -- clear it
+    w["SSID"] = ""
+    w["PASS"] = ""
+with open(dst, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+if not w.get("SSID"):
+    print("    NOTE: WIFI.SSID is empty -- the board will boot offline.")
+PY
+echo "==> Uploading system-config.json"
+"$MPREMOTE" connect "$PORT" cp -f "$CONFIG_OUT" :/system-config.json
+if [ -f app/version.txt ]; then
+    "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt
+fi
+
+# --- Reset, verify boot over USB ----------------------------------------------------
+# Each check cycle resets the board, gives the app time to boot (it file-logs its
+# progress), then reads /log.txt. Reading via raw REPL interrupts the app, so the
+# final reset below is what leaves it autonomous (same rule as the USB deploy path).
+echo "==> Verifying the app boots (USB)"
+deadline=$(( $(date +%s) + 90 ))
+OK=0
+LOG=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    "$MPREMOTE" connect "$PORT" reset >/dev/null 2>&1 || true
+    sleep 12
+    LOG=$("$MPREMOTE" connect "$PORT" cat :/log.txt 2>/dev/null | tail -30) || LOG=""
+    case "$LOG" in
+        *"entering main loop"*) OK=1; break ;;
+    esac
+done
+if [ "$OK" -ne 1 ]; then
+    echo "ERROR: the app did not reach its main loop. Last log lines:" >&2
+    printf '%s\n' "$LOG" >&2
+    exit 1
+fi
+echo "==> App booted and reached the main loop"
+
+# --- Final reset: restore autonomous execution ---------------------------------------
+echo "==> Final reset (restores autonomous execution)"
+"$MPREMOTE" connect "$PORT" reset >/dev/null 2>&1 || true
+
+# --- Confirm network autonomy (best effort; only if an SSID was configured) ----------
+FINAL_SSID=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("WIFI",{}).get("SSID","") or "")' "$CONFIG_OUT" 2>/dev/null) || FINAL_SSID=""
+if [ -z "$FINAL_SSID" ]; then
+    echo "==> PROVISION OK (USB-verified). No Wi-Fi SSID was configured, so the board"
+    echo "    is autonomous but offline. Re-run with --ssid \"...\" --pass \"...\" to give it Wi-Fi."
+    exit 0
+fi
+IP="${OTC_IP:-}"
+if [ -z "$IP" ] && [ -f .otc-device-ip ]; then
+    IP=$(tr -d '[:space:]' < .otc-device-ip)
+fi
+if [ -n "$IP" ]; then
+    BASE="http://$IP:8080"
+    echo "==> Checking Wi-Fi autonomy at $BASE"
+    deadline=$(( $(date +%s) + 60 ))
+    OK=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        RAW=$(curl -sf --max-time 4 "$BASE/status" 2>/dev/null) || RAW=""
+        case "$RAW" in
+            *'"state": "Connected"'*|*'"state":"Connected"'*) OK=1; break ;;
+        esac
+        sleep 3
+    done
+    if [ "$OK" = 1 ]; then
+        echo "==> PROVISION OK: $BOARD is autonomous at $BASE"
+        exit 0
+    fi
+    echo "    note: $BASE did not report Wi-Fi within 60s (still connecting, or a different IP)."
+fi
+echo "==> PROVISION OK (USB-verified). Once it joins Wi-Fi: curl http://<ip>:8080/status"
