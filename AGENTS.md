@@ -34,12 +34,16 @@ several seconds. Retry before concluding that WiFi failed.
 ## Known-good deployment workflow
 
 ```sh
-./tools/deploy.sh
+./tools/deploy.sh            # default: network-native, no USB
+./tools/deploy.sh --usb      # fallback: board on USB, mpremote-based path
 ```
 
-This bumps the app version, builds, serves the update, resets the board, waits
-for A/B promotion, runs the on-device self-test, and performs the required final
-reset. Once it prints `DEPLOY OK`, validate over HTTP/TCP only.
+Network mode bumps the app version, builds, serves the update, reboots the
+board over HTTP (`POST /reboot` triggers the boot-time OTA check), polls
+`GET /status` for A/B promotion, and runs the self-test over HTTP. The app is
+never interrupted, so no final reset is needed. `--usb` keeps the legacy
+mpremote path and performs the required final reset after its USB self-test.
+Once it prints `DEPLOY OK`, validate over HTTP/TCP only.
 
 Commit after each logical, device-verified step. Do not include unrelated
 working-tree changes; `tools/capture_boot.py` may exist as an untracked local
