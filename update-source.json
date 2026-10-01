@@ -1,0 +1,11 @@
+{
+  "mode": "local",
+  "local": {
+    "base_url": "http://10.9.1.196:8000"
+  },
+  "github": {
+    "repo": "",
+    "token": ""
+  },
+  "update_on_boot": true
+}

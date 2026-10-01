@@ -10,7 +10,10 @@
 #      libs, initial app in slot A).
 #   4. Upload a resolved system-config.json: the local (gitignored)
 #      system-config.json if present, otherwise a default generated from
-#      system-config.example.json. --ssid / --pass always win for WIFI.
+#      system-config.example.json. --ssid / --pass always win for WIFI, and
+#      the FIRMWARE (OTA) section is populated from update-source.json
+#      (local update server or GitHub release; UPDATE_ON_BOOT is disabled
+#      if no usable source is configured).
 #   5. Reset, verify the app reached its main loop (over USB), then perform
 #      the required final reset so the device is left autonomous.
 #   6. If an SSID was configured and the device IP is known, confirm the
@@ -227,9 +230,9 @@ for item in "$STAGE"/*; do
     "$MPREMOTE" connect "$PORT" cp -r -f "$item" :/
 done
 echo "==> Resolving system-config.json (local file or example base; --ssid/--pass win)"
-"$PYTHON" - "$CONFIG_SRC" "$CONFIG_OUT" "$SSID_ARG" "$PASS_ARG" <<'PY'
-import json, sys
-src, dst, ssid, passwd = sys.argv[1:5]
+"$PYTHON" - "$CONFIG_SRC" "$CONFIG_OUT" "$SSID_ARG" "$PASS_ARG" "update-source.json" <<'PY'
+import json, os, sys
+src, dst, ssid, passwd, usrc = sys.argv[1:6]
 with open(src) as f:
     cfg = json.load(f)
 dev = cfg.setdefault("DEVICE", {})
@@ -243,6 +246,38 @@ if passwd:
 if w.get("SSID") == "your-wifi-ssid":   # example placeholder -- clear it
     w["SSID"] = ""
     w["PASS"] = ""
+# Populate the FIRMWARE (OTA) section from the project's update-source.json:
+# mode "local"  -> DIRECT_BASE_URL (update server, e.g. tools/serve_update.sh)
+# mode "github" -> GITHUB_REPO (+ optional token) for release-based OTA
+fw = cfg.setdefault("FIRMWARE", {})
+us = None
+if os.path.exists(usrc):
+    with open(usrc) as f:
+        us = json.load(f)
+source_ok = False
+if us:
+    if us.get("mode") == "local":
+        base = (us.get("local") or {}).get("base_url") or ""
+        if base:
+            fw["DIRECT_BASE_URL"] = base
+            fw["GITHUB_REPO"] = None
+            fw["GITHUB_TOKEN"] = ""
+            source_ok = True
+            print("    OTA source: local update server %s" % base)
+    elif us.get("mode") == "github":
+        gh = us.get("github") or {}
+        if gh.get("repo"):
+            fw["GITHUB_REPO"] = gh["repo"]
+            fw["GITHUB_TOKEN"] = gh.get("token", "")
+            fw["DIRECT_BASE_URL"] = None
+            source_ok = True
+            print("    OTA source: GitHub %s" % gh["repo"])
+    if source_ok:
+        fw["UPDATE_ON_BOOT"] = bool(us.get("update_on_boot", True))
+if not source_ok:
+    fw["UPDATE_ON_BOOT"] = False
+    print("    NOTE: no usable update source (update-source.json) --"
+          " UPDATE_ON_BOOT disabled (no OTA check at boot).")
 with open(dst, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
@@ -252,7 +287,21 @@ PY
 echo "==> Uploading system-config.json"
 "$MPREMOTE" connect "$PORT" cp -f "$CONFIG_OUT" :/system-config.json
 if [ -f app/version.txt ]; then
-    "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt
+    # Verify the read-back: a silently lost upload makes the board believe it is
+    # version 0.0.0 on first boot (it then self-heals via an OTA download, but we
+    # prefer the known-good file to actually be there).
+    EXPECTED=$(tr -d '[:space:]' < app/version.txt)
+    for attempt in 1 2; do
+        "$MPREMOTE" connect "$PORT" cp -f app/version.txt :/version.txt
+        GOT=$("$MPREMOTE" connect "$PORT" cat :/version.txt 2>/dev/null | tr -d '[:space:]') || GOT=""
+        [ "$GOT" = "$EXPECTED" ] && break
+        echo "    version.txt read-back mismatch (attempt $attempt), retrying..."
+    done
+    if [ "$GOT" != "$EXPECTED" ]; then
+        echo "WARNING: /version.txt could not be verified on the board (expected $EXPECTED)." >&2
+        echo "    The board will detect this as 0.0.0 on first boot and pull the" >&2
+        echo "    current firmware from its configured OTA source." >&2
+    fi
 fi
 
 # --- Reset, verify boot over USB ----------------------------------------------------

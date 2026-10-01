@@ -49,6 +49,32 @@ Commit after each logical, device-verified step. Do not include unrelated
 working-tree changes; `tools/capture_boot.py` may exist as an untracked local
 experiment.
 
+## OTA update source (`update-source.json`)
+
+The board's `FIRMWARE` OTA section is populated from the project-level
+`update-source.json` (committed; board config is rendered from it at
+provision time, and should match it for manual deploys):
+
+```json
+{ "mode": "local",
+  "local":    { "base_url": "http://10.9.1.196:8000" },
+  "github":   { "repo": "", "token": "" },
+  "update_on_boot": true }
+```
+
+- `mode: "local"` → `FIRMWARE.DIRECT_BASE_URL` is set (the updater fetches
+  `<base_url>/metadata.json` then the package; `tools/serve_update.sh` serves
+  `build/` on `:8000` and is what `deploy.sh` relies on).
+- `mode: "github"` → `FIRMWARE.GITHUB_REPO` (+ optional `GITHUB_TOKEN`) is
+  set; `DIRECT_BASE_URL` is cleared.
+- No usable source → `UPDATE_ON_BOOT` is forced `false` (no 404 noise at boot).
+
+Verified on-device (firmware 1.1.16): a freshly provisioned board checked the
+local server, downloaded the package, staged it into `/apps/b` (OTA layout:
+compiled `.mpy` + `integrity.json`), booted the candidate, and confirmed it —
+leaving `ota-state.json` `active: "b"`. So a healthy board may well report
+`slot.active` of either slot; the OTA package slot is not always "a".
+
 ## Blank / corrupted Pico provisioning
 
 `tools/provision.sh` flashes a blank or corrupted board entirely over USB
@@ -87,6 +113,13 @@ away):
 - **macOS `cp` fails on the bootrom volume** ("could not copy extended
   attributes ... Attribute not found") because it copies xattrs onto an
   MS-DOS volume. Use a plain byte copy (`cat uf2 > volume/uf2`).
+- **An `mpremote cp` can report success while the file never lands** (a
+  transient `Device not configured` was observed in the disconnect handshake).
+  The script therefore read-verifies `/version.txt` after upload and retries
+  once. If `/version.txt` is absent at boot the updater logs
+  "Version file not found, defaulting to 0.0.0" and the board self-heals by
+  downloading the current firmware from its OTA source — harmless, but the
+  read-back check is there to avoid relying on that.
 
 ## Firmware entry and A/B layout
 
