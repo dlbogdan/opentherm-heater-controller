@@ -95,7 +95,9 @@ The UF2 is pinned (`micropython.org`, `v1.29.0`) and cached under `.cache/`.
 The tool handles all three board states: bootrom volume already mounted, a
 running-but-corrupt board (kicked into BOOTSEL via `mpremote bootloader`), or
 a blank board (prompts to hold BOOTSEL). Without Wi-Fi credentials the board
-is provisioned offline and the script says so.
+is provisioned offline and the script says so. It auto-detects a running
+board's serial port before this decision; the physical BOOTSEL prompt is only
+the fallback when no serial device and no bootrom volume are visible.
 
 Verified-on-device pitfalls the tool works around (do not "simplify" them
 away):

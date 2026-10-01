@@ -136,6 +136,13 @@ wait_volume() {
     return 1
 }
 
+# SERIAL_PORT is an optional override. Without it, detect a running board now
+# so mpremote can enter BOOTSEL automatically instead of incorrectly asking
+# for the physical button.
+if [ -z "$PORT" ]; then
+    PORT=$(find_port) || PORT=""
+fi
+
 echo "==> Waiting for the RPI-RP2 bootrom volume (board in BOOTSEL)..."
 VOLUME=$(find_volume) || VOLUME=""
 if [ -n "$VOLUME" ]; then
