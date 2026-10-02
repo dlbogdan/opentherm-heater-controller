@@ -35,25 +35,39 @@ class BoilerTransport:
         raise NotImplementedError
 
 
-def apply_decision(transport, decision):
-    """Translate one logical controller decision into physical commands."""
-    if decision.action == "skip":
-        return True
+def apply_decision(transport, decision, controller=None):
+    """Translate a logical decision into physical commands.
 
-    if decision.action == "heat":
-        if decision.target is None:
-            raise ValueError("heat decision requires a target")
-        heating_ok = transport.set_heating(True)
-        target_ok = transport.set_flow_target(decision.target)
-        return bool(heating_ok and target_ok)
+    Pass the originating controller so a rejected or exceptional transport
+    operation restores its optimistic heating/last-setpoint state and the next
+    control tick retries instead of incorrectly rate-limiting the command.
+    """
+    success = False
+    try:
+        if decision.action == "skip":
+            success = True
+        elif decision.action == "heat":
+            if decision.target is None:
+                raise ValueError("heat decision requires a target")
+            heating_ok = transport.set_heating(True)
+            target_ok = transport.set_flow_target(decision.target)
+            success = bool(heating_ok and target_ok)
+        elif decision.action == "off":
+            if decision.release_override:
+                heating_ok = transport.set_heating(False)
+                release_ok = transport.release_override()
+                success = bool(heating_ok and release_ok)
+            else:
+                if decision.target is None:
+                    raise ValueError("off setpoint reset requires a target")
+                success = bool(transport.set_flow_target(decision.target))
+        else:
+            raise ValueError("unknown decision action: %s" % decision.action)
+    except Exception:
+        if controller is not None:
+            controller.record_result(decision, False)
+        raise
 
-    if decision.action == "off":
-        if decision.release_override:
-            heating_ok = transport.set_heating(False)
-            release_ok = transport.release_override()
-            return bool(heating_ok and release_ok)
-        if decision.target is None:
-            raise ValueError("off setpoint reset requires a target")
-        return bool(transport.set_flow_target(decision.target))
-
-    raise ValueError("unknown decision action: %s" % decision.action)
+    if controller is not None:
+        controller.record_result(decision, success)
+    return success

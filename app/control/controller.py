@@ -22,7 +22,8 @@ class Decision:
 
     def __init__(self, action, target=None, heating_on=False, base_flow=None,
                  solar_offset=0.0, demand_offset=0.0, reason="",
-                 release_override=False):
+                 release_override=False, previous_heating_on=None,
+                 previous_last_sent_flow=None):
         self.action = action            # "skip" | "off" | "heat"
         self.target = target            # clamped flow to send (°C) or off_sentinel
         self.heating_on = heating_on
@@ -31,6 +32,10 @@ class Decision:
         self.demand_offset = demand_offset
         self.reason = reason
         self.release_override = bool(release_override)
+        # Snapshot used to roll logical output state back after a failed
+        # physical transport operation. Solar state deliberately keeps moving.
+        self.previous_heating_on = previous_heating_on
+        self.previous_last_sent_flow = previous_last_sent_flow
 
     def __repr__(self):
         return ("Decision(action=%s target=%s heating_on=%s base=%s "
@@ -59,12 +64,26 @@ class Controller:
         self.has_demand_sensor = False  # no demand sensor by default
 
     def tick(self, now_ms, params, t_out, lux=None, demand_raw=None):
-        """Run one control tick and return a :class:`Decision`."""
+        """Run one control tick and return a :class:`Decision`.
+
+        Output state advances optimistically and can be restored with
+        :meth:`record_result` if the transport rejects the decision.
+        """
+        previous_heating_on = self.heating_on
+        previous_last_sent_flow = self.last_sent_flow
+
+        def decision(action, **kwargs):
+            return Decision(
+                action,
+                previous_heating_on=previous_heating_on,
+                previous_last_sent_flow=previous_last_sent_flow,
+                **kwargs)
+
         # Failsafe: no outdoor temp -> fixed safe flow, heating on (arch §9).
         if t_out is None:
             self.heating_on = True
             self.last_sent_flow = FAILSAFE_FLOW
-            return Decision("heat", target=FAILSAFE_FLOW, heating_on=True,
+            return decision("heat", target=FAILSAFE_FLOW, heating_on=True,
                             reason="failsafe: no fresh t_out")
 
         if lux is None:
@@ -104,21 +123,30 @@ class Controller:
                            params["off_sentinel"])
 
         if not su:
-            return Decision("skip", heating_on=self.heating_on, base_flow=bf,
+            return decision("skip", heating_on=self.heating_on, base_flow=bf,
                             solar_offset=solar_off, demand_offset=dem_off,
                             reason="rate-limited hold")
 
         if not self.heating_on:
             self.last_sent_flow = params["off_sentinel"]
-            return Decision("off", target=params["off_sentinel"], heating_on=False,
-                            base_flow=bf, solar_offset=solar_off,
-                            demand_offset=dem_off,
-                            reason=("release override" if mode_changed
-                            else "setpoint reset"),
-                        release_override=mode_changed)
+            return decision(
+                "off", target=params["off_sentinel"], heating_on=False,
+                base_flow=bf, solar_offset=solar_off, demand_offset=dem_off,
+                reason=("release override" if mode_changed
+                        else "setpoint reset"),
+                release_override=mode_changed)
 
         sent_target = frost_clamp(target, t_out)
         self.last_sent_flow = sent_target
-        return Decision("heat", target=sent_target, heating_on=True, base_flow=bf,
-                        solar_offset=solar_off, demand_offset=dem_off,
-                        reason=("mode->ON" if mode_changed else "target update"))
+        return decision(
+            "heat", target=sent_target, heating_on=True, base_flow=bf,
+            solar_offset=solar_off, demand_offset=dem_off,
+            reason=("mode->ON" if mode_changed else "target update"))
+
+    def record_result(self, decision, success):
+        """Restore output state when a physical decision was not accepted."""
+        if success:
+            return
+        if decision.previous_heating_on is not None:
+            self.heating_on = decision.previous_heating_on
+        self.last_sent_flow = decision.previous_last_sent_flow

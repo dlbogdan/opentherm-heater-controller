@@ -24,17 +24,17 @@ def run():
     transport = LogTransport()
 
     heat_1 = controller.tick(0, params, 10.0, lux=0.0)
-    apply_decision(transport, heat_1)
+    apply_decision(transport, heat_1, controller)
 
     turn_off = controller.tick(60000, params, 20.0, lux=0.0)
-    apply_decision(transport, turn_off)
+    apply_decision(transport, turn_off, controller)
 
     controller.last_sent_flow = 50
     reset_stale = controller.tick(120000, params, 20.0, lux=0.0)
-    apply_decision(transport, reset_stale)
+    apply_decision(transport, reset_stale, controller)
 
     heat_2 = controller.tick(180000, params, 10.0, lux=0.0)
-    apply_decision(transport, heat_2)
+    apply_decision(transport, heat_2, controller)
 
     expected = [
         ("set_heating", True),
