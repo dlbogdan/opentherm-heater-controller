@@ -13,4 +13,5 @@ build/
 release/
 system-config.json
 .otc-device-ip
+.micropy-device-ip
 .cache/
