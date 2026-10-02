@@ -3,6 +3,21 @@
 Read this before diagnosing or deploying the Pico firmware. These facts were
 verified on the real Pico 2W and prevent several misleading failure modes.
 
+## Framework-owned device tooling
+
+The generic device tooling lives in the `micropy-system` framework submodule
+(`micropy-system/tools/`): `device.py` (USB CLI), `console.py` (network REPL),
+`discover.py` (LAN scanner), `render_config.py` (config resolution),
+`provision.sh` (USB provisioning engine), `assemble.py` (device-tree builder).
+
+The project-level `tools/` entries for those tools are thin `os.execv`
+shims that pin project defaults (e.g. `DEVICE.NAME=otc`, the "entering main
+loop" boot marker, `.otc-device-ip`) and delegate to the canonical
+implementations. Boundary: the framework owns lifecycle and device machinery
+(USB, provisioning, A/B, OTA plumbing); the project owns the heating domain
+(`app/`, `deploy.sh` orchestration). Tool updates flow through
+`tools/update_framework.sh`; do not fork the shims back into full copies.
+
 ## Critical: USB tools stop the running application
 
 - `mpremote` enters raw REPL by sending Ctrl-C. This interrupts the currently
