@@ -46,10 +46,21 @@ def _confirm_running_slot():
     Runs before any blocking I/O so it is comfortably inside the 12 s candidate
     window. On a candidate boot the framework's watchdog feed loop then performs
     one clean reboot so we return as an ordinary (un-supervised) slot.
+
+    The candidate flag must be sampled BEFORE confirming (confirmation clears
+    ``pending``): while ``state.candidate_boot`` is set the device layer holds
+    non-idempotent physical actuation -- this boot lives ~1-2 s and reboots.
     """
-    running_slot = load_state()["pending"] or load_state()["active"]
+    pre = load_state()
+    candidate_boot = pre["pending"] is not None
+    running_slot = pre["pending"] or pre["active"]
     confirm_running_slot(running_slot)
-    logger.info("App: running as slot '%s' (confirmed)." % running_slot)
+    state.candidate_boot = candidate_boot
+    logger.info(
+        "App: running as slot '%s' (confirmed)%s."
+        % (running_slot,
+           " [candidate boot - holding actuation]" if candidate_boot else ""),
+        log_to_file=True)
     return running_slot
 
 

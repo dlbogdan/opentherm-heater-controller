@@ -9,6 +9,14 @@ it deliberately does NOT survive a power cycle.
 Persisted to a small ``state.json`` and written ONLY on an OFF<->HEATING
 transition, using the framework's atomic temp-file + rename pattern. Device-only
 (depends on the framework logger).
+
+Candidate-boot contract (A/B safety): the boot that follows an OTA install is
+supervised and reboots ~1-2 s after ``main()`` confirms the slot. The device
+layer must NOT issue non-idempotent physical actuation (boiler ON/OFF, setpoint
+release) while ``State.candidate_boot`` is set -- the boiler's last state
+naturally persists across the confirmation reboot, and the ACTIVE boot applies
+the first real decision. ``candidate_boot`` is runtime-only and never
+persisted.
 """
 
 import json
@@ -25,6 +33,10 @@ class State:
     def __init__(self, filename=STATE_FILE):
         self.filename = filename
         self.heating_on = False
+        # Runtime-only (never persisted): True on the supervised candidate boot
+        # after an OTA apply. The device layer holds physical actuation while it
+        # is set; see the module docstring.
+        self.candidate_boot = False
         self._load()
 
     def _load(self):
