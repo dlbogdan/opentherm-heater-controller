@@ -139,6 +139,12 @@ async def main():
     wifi, has_ssid = _make_wifi(sys_config)
     tasks = TaskManager()
 
+    # Shared recording transport: the shell observes this exact instance and
+    # the future control task will apply its decisions to the same object.
+    # Until physical OTGW wiring lands, it provides a safe integration seam.
+    from transport.log import LogTransport
+    transport = LogTransport()
+
     if has_ssid:
         _apply_static_ip()  # no-op unless a static IP is configured
         wifi.up()  # non-blocking connect kickoff
@@ -160,6 +166,8 @@ async def main():
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
+        from shell_commands import register_transport_commands
+        register_transport_commands(shell, transport)
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",
