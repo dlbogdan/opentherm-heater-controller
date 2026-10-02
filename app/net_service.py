@@ -12,7 +12,7 @@ control core):
 * **Debug console** (``console_port``, default 8081)
     A line-based Python eval loop over raw TCP. Each line is ``exec``'d in a
     persistent namespace and its stdout/stderr is returned, terminated by an
-    ``<<<END>>>`` marker (see ``tools/console.py`` for the client).
+    ``<<<END>>>`` marker (see ``micropy-system/tools/console.py`` for the client).
 
 The service is deliberately small and defensive: any handler error is contained
 to that request, and a failure to start the service must never take down the
