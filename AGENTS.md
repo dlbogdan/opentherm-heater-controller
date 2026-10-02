@@ -5,18 +5,29 @@ verified on the real Pico 2W and prevent several misleading failure modes.
 
 ## Framework-owned device tooling
 
-The generic device tooling lives in the `micropy-system` framework submodule
-(`micropy-system/tools/`): `device.py` (USB CLI), `console.py` (network REPL),
-`discover.py` (LAN scanner), `render_config.py` (config resolution),
-`provision.sh` (USB provisioning engine), `assemble.py` (device-tree builder).
+All generic device tooling lives in the `micropy-system` framework submodule
+(`micropy-system/tools/`):
 
-The project-level `tools/` entries for those tools are thin `os.execv`
-shims that pin project defaults (e.g. `DEVICE.NAME=otc`, the "entering main
-loop" boot marker, `.otc-device-ip`) and delegate to the canonical
-implementations. Boundary: the framework owns lifecycle and device machinery
-(USB, provisioning, A/B, OTA plumbing); the project owns the heating domain
-(`app/`, `deploy.sh` orchestration). Tool updates flow through
-`tools/update_framework.sh`; do not fork the shims back into full copies.
+**Device lifecycle:** `device.py` (USB CLI), `console.py` (network REPL),
+`discover.py` (LAN scanner), `net.sh` (HTTP API client),
+`render_config.py` (config resolution), `provision.sh` (USB provisioning
+engine), `assemble.py` (device-tree builder).
+
+**Build, release, deploy:** `setup_build_env.sh` (venv +
+`requirements-dev.txt`), `build_firmware.sh` (assemble + compile + package),
+`serve_update.sh` (OTA update server), `release_github.sh` (tag + push),
+`deploy.sh` (bump → build → serve → OTA → promotion poll → self-test).
+
+The project-level `tools/` entries are all thin shims (shell `exec` or
+`os.execv`) that pin project defaults (e.g. `DEVICE.NAME=otc`, the "entering
+main loop" boot marker, the `.otc-device-ip` remembered-IP file) and delegate
+to the canonical implementations. The only non-shim in project `tools/` is
+`update_framework.sh` itself. Boundary: the framework owns lifecycle, device
+machinery, and build/OTA plumbing (USB, provisioning, A/B, release); the
+project owns the heating domain (`app/`) and its defaults. Tool updates flow
+through `tools/update_framework.sh`; do not fork the shims back into full
+copies. Every canonical tool accepts `--app-root`, so it can be called either
+via the project shim or directly: `./micropy-system/tools/deploy.sh`.
 
 ## Critical: USB tools stop the running application
 

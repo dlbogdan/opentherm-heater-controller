@@ -1,9 +1,7 @@
 #!/bin/sh
+# Shim: the canonical venv setup lives in the framework
+# (micropy-system/tools/setup_build_env.sh), which installs the framework's
+# requirements-dev.txt (mpy-cross, mpremote, pyserial).
 set -eu
 APP_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-SUBMODULE="micropy-system"
-
-python3 -m venv "$APP_ROOT/.venv"
-"$APP_ROOT/.venv/bin/python" -m pip install --upgrade pip
-"$APP_ROOT/.venv/bin/python" -m pip install     --requirement "$APP_ROOT/$SUBMODULE/requirements.txt"
-echo "Build environment is ready at $APP_ROOT/.venv"
+exec "$APP_ROOT/micropy-system/tools/setup_build_env.sh" --app-root "$APP_ROOT" "$@"
