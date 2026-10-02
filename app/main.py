@@ -120,6 +120,11 @@ async def main():
         logger.error("App: [degraded - POST failed, holding actuation].",
                      log_to_file=True)
 
+    # 1b. Config pre-flight: the boot POST is heap-only, so enforce the app's
+    #     own cross-key constraints here -- reset any out-of-range value to its
+    #     default and log problems -- before the control loop can read them.
+    config.validate()
+
     # 2. Framework harness: config + Wi-Fi + scheduler.
     sys_config = ConfigManager("/system-config.json")
     wifi, has_ssid = _make_wifi(sys_config)
