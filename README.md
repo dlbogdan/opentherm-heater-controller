@@ -42,3 +42,19 @@ provisioned once through USB/MicroPico because the installed old updater cannot
 download HTTP. After synchronization, ensure no stale
 `lib/coresys/manager_firmware.mpy` remains beside the assembled `.py`, reset the
 board, and then use local HTTP OTA normally.
+
+## Recording transport diagnostics
+
+The application exposes its shared `LogTransport` through the framework shell:
+
+```sh
+python micropy-system/tools/telnet.py DEVICE_IP transport status
+python micropy-system/tools/telnet.py DEVICE_IP transport commands 20
+python micropy-system/tools/telnet.py DEVICE_IP transport clear
+python micropy-system/tools/telnet.py DEVICE_IP transport save
+```
+
+History is a bounded 64-event in-memory ring, so recording does not continuously
+write flash. `transport save` explicitly writes an atomic JSON Lines snapshot to
+`/transport-events.jsonl`. The recorder is wired and queryable now; it will begin
+receiving live decisions when the control scheduler is connected in `main.py`.
