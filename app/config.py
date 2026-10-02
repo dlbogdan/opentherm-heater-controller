@@ -106,37 +106,104 @@ class Config:
         return dict((k, self.get(k)) for k in DEFAULTS)
 
     def validate(self):
-        """Enforce the §6 constraints. Returns a list of problem strings.
+        """Validate types, domains, and §6 cross-key constraints.
 
-        Any violating key is reset to its default so the pipeline never runs
-        with an impossible combination; a clean config yields an empty list.
+        Invalid values are reset to defaults. Cross-key checks run repeatedly
+        because resetting one side of a relationship can expose another bad
+        relationship; the method returns only after the resulting snapshot is
+        internally consistent.
         """
         problems = []
-
-        def need(cond, message, bad_key):
-            if not cond:
-                problems.append(message)
-                self.set(bad_key, DEFAULTS[bad_key])
-
+        seen = set()
         v = self.all()  # seeds any missing keys on first boot
-        need(v["flow_min"] < v["flow_min_on"],
-             "flow_min must be < flow_min_on", "flow_min")
-        need(v["t_on"] < v["t_off"],
-             "t_on must be < t_off", "t_on")
-        need(v["lux_low"] < v["lux_high"],
-             "lux_low must be < lux_high", "lux_low")
-        need(v["flow_min"] < v["flow_max"],
-             "flow_min must be < flow_max", "flow_min")
-        need(v["t_design"] < v["t_on"],
-             "t_design must be < t_on", "t_design")
-        need(v["curve_base"] <= v["flow_design"],
-             "curve_base must be <= flow_design", "curve_base")
-        need(v["ccu3_poll_s"] >= 30,
-             "ccu3_poll_s must be >= 30", "ccu3_poll_s")
+
+        def problem(message):
+            if message not in seen:
+                seen.add(message)
+                problems.append(message)
+
+        def reset(key, message):
+            problem(message)
+            value = DEFAULTS[key]
+            v[key] = value
+            self.set(key, value)
+
+        # Config files are user-editable JSON. Reject booleans as numbers and
+        # reject wrong scalar types before doing comparisons or arithmetic.
+        for key, default in DEFAULTS.items():
+            value = v[key]
+            if isinstance(default, bool):
+                valid = isinstance(value, bool)
+            elif isinstance(default, (int, float)):
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+            else:
+                valid = isinstance(value, str)
+            if not valid:
+                reset(key, "%s has invalid type" % key)
+
+        allowed = {
+            "transport": ("otgw", "direct_ot"),
+            "t_out_source": ("ccu3", "local", "auto"),
+            "lux_source": ("ccu3", "local", "auto"),
+        }
+        for key, choices in allowed.items():
+            if v[key] not in choices:
+                reset(key, "%s has invalid value" % key)
+
+        domains = (
+            ("b", v["b"] > 0, "b must be > 0"),
+            ("solar_halflife", v["solar_halflife"] > 0,
+             "solar_halflife must be > 0"),
+            ("solar_charge", v["solar_charge"] >= 0,
+             "solar_charge must be >= 0"),
+            ("lux_max_offset", v["lux_max_offset"] >= 0,
+             "lux_max_offset must be >= 0"),
+            ("lux_mult", v["lux_mult"] >= 0, "lux_mult must be >= 0"),
+            ("demand_exponent", v["demand_exponent"] > 0,
+             "demand_exponent must be > 0"),
+            ("demand_max_p_offset", v["demand_max_p_offset"] >= 0,
+             "demand_max_p_offset must be >= 0"),
+            ("min_change", v["min_change"] >= 0,
+             "min_change must be >= 0"),
+            ("net_port", 1 <= v["net_port"] <= 65535,
+             "net_port must be in 1..65535"),
+        )
+        for key, valid, message in domains:
+            if not valid:
+                reset(key, message)
+
+        constraints = (
+            ("flow_min must be < flow_min_on", ("flow_min", "flow_min_on"),
+             lambda: v["flow_min"] < v["flow_min_on"]),
+            ("t_on must be < t_off", ("t_on", "t_off"),
+             lambda: v["t_on"] < v["t_off"]),
+            ("lux_low must be < lux_high", ("lux_low", "lux_high"),
+             lambda: v["lux_low"] < v["lux_high"]),
+            ("flow_min must be < flow_max", ("flow_min", "flow_max"),
+             lambda: v["flow_min"] < v["flow_max"]),
+            ("t_design must be < t_on", ("t_design", "t_on"),
+             lambda: v["t_design"] < v["t_on"]),
+            ("curve_base must be <= flow_design",
+             ("curve_base", "flow_design"),
+             lambda: v["curve_base"] <= v["flow_design"]),
+            ("ccu3_poll_s must be >= 30", ("ccu3_poll_s",),
+             lambda: v["ccu3_poll_s"] >= 30),
+        )
+        for _round in range(len(constraints) + 1):
+            failed = [(message, keys) for message, keys, check in constraints
+                      if not check()]
+            if not failed:
+                break
+            for message, keys in failed:
+                problem(message)
+                for key in keys:
+                    value = DEFAULTS[key]
+                    v[key] = value
+                    self.set(key, value)
 
         if problems:
-            for p in problems:
-                logger.error("Config validation: " + p)
+            for item in problems:
+                logger.error("Config validation: " + item)
         else:
             logger.info("Config: validation OK (%d params)." % len(DEFAULTS))
         return problems
