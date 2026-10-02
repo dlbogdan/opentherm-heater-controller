@@ -166,9 +166,9 @@ async def main():
             description="remote shell (status/log/reboot + selftest)")
         logger.info("App: remote shell service task started.")
 
-    # 3. App domain config + state (Step 1): log the boot snapshot. (Config is
-    #    loaded from /config.json; the boot POST is now heap-only, so no
-    #    config validate/reset runs at boot.)
+    # 3. App domain config + state (Step 1): log the validated boot snapshot.
+    #    Config is loaded from /config.json and repaired by the pre-flight
+    #    validation above before any future control task can consume it.
     logger.info(
         "App: t_off=%s t_on=%s flow[%s..%s] min_on=%s design=%s/%s transport=%s"
         " | heating_on=%s"
