@@ -5,11 +5,13 @@ establishes the three things every later step builds on:
 
 * **A/B slot confirmation** — owned by the **framework launcher** (see
   ``micropy-system/src/slot_main.py`` + ``lib/coresys/post.py``): it runs the
-  power-on self-test (framework checks + this app's ``post_checks()`` hook)
-  BEFORE a candidate may confirm; a passing candidate is confirmed inside the
-  12 s watchdog window, a failing one is rolled back and quarantined. This app
-  only *supplies* domain checks (``post_checks`` / ``post.py``) and *reads* the
-  boot context (``is_candidate_boot`` / ``is_degraded``) to hold actuation.
+  power-on self-test (the framework's general checks) BEFORE a candidate may
+  confirm; a passing candidate is confirmed inside the 12 s watchdog window, a
+  failing one is rolled back and quarantined. This app supplies no domain
+  checks of its own -- it just *reads* the boot context
+  (``is_candidate_boot`` / ``is_degraded``) to hold actuation. The control-core
+  self-test (``selftest.py``) stays as the on-demand reference (shell
+  ``selftest``) until the transport is live.
 * **Wi-Fi** (optional, non-fatal) — kicked off non-blocking and driven to
   completion by a 500 ms keepalive task; the control core runs fine with it off.
 * **The scheduler** — a ``TaskManager`` whose periodic tasks are the single place
@@ -41,18 +43,6 @@ from lib.coresys.manager_tasks import TaskManager
 # work (the modules themselves only expose the class + instance).
 from config import config
 from state import state
-import post
-
-
-def post_checks():
-    """Guest POST hook for the framework harness (``lib/coresys/post.py``).
-
-    The framework launcher calls this (via ``run_post``) on every boot, BEFORE
-    a candidate may confirm. It returns the list of ``(name, ok, detail)``
-    domain checks; the free-heap check is the framework's default. See
-    ``app/post.py`` for the check implementations.
-    """
-    return post.checks(config, state)
 
 
 def _make_wifi(sys_config):
@@ -113,18 +103,6 @@ def _run_selftest(_args=""):
         verdict, ("\n" + detail) if detail else "")
 
 
-def _run_post(_args=""):
-    """Run the power-on self-test on demand; return the verdict line."""
-    from lib.coresys import post as framework_post
-
-    class _Hook(object):
-        def post_checks(self):
-            return post.checks(config, state)
-
-    result = framework_post.run_post(_Hook())
-    return "%s: %s" % ("PASS" if result.ok else "FAIL", result.summary())
-
-
 async def main():
     logger.info("App: main entered.", log_to_file=True)
 
@@ -168,7 +146,6 @@ async def main():
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
-        shell.add("post", _run_post, "run the power-on self-test")
         tasks.create_task(
             shell.start(), task_id="net_service",
             description="remote shell (status/log/reboot/repl + selftest)")
