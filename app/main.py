@@ -77,6 +77,15 @@ def _apply_static_ip():
         return False
 
 
+async def _run_optional_service(coro, name):
+    """Contain an optional long-running service failure to that service."""
+    try:
+        await coro
+    except Exception as e:
+        logger.error("App: optional service %s failed: %s" % (name, e),
+                     log_to_file=True)
+
+
 def _run_selftest(_args=""):
     """Run the control-core self-test; return 'PASS/FAIL: ...' + check lines."""
     import builtins
@@ -143,17 +152,18 @@ async def main():
         logger.info("App: no Wi-Fi SSID configured; running offline.")
 
     # Remote shell (framework service on the standard telnet port): status,
-    # log, heap, reboot, repl built-ins + the app self-test. Started as a
-    # one-shot task; a failure here is isolated to that task and cannot take
-    # down the control loop.
+    # log, heap, reboot (+ optional repl) and the app self-test. Started as a
+    # one-shot task. Wrap it so an unexpected service exception is logged and
+    # contained instead of being re-raised by TaskManager into the event loop.
     if config.get("net_enabled") and has_ssid:
         from lib.coresys.telnet_service import TelnetService
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
         tasks.create_task(
-            shell.start(), task_id="net_service",
-            description="remote shell (status/log/reboot/repl + selftest)")
+            _run_optional_service(shell.start(), "remote shell"),
+            task_id="net_service",
+            description="remote shell (status/log/reboot + selftest)")
         logger.info("App: remote shell service task started.")
 
     # 3. App domain config + state (Step 1): log the boot snapshot. (Config is
