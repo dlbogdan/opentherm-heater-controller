@@ -20,6 +20,7 @@ Contract (micropy-system): this module is imported as ``app_entry`` and its
 loop and halts the device).
 """
 
+import sys
 import time
 import gc
 
@@ -84,6 +85,32 @@ def _apply_static_ip():
         return False
 
 
+def _run_selftest(_args=""):
+    """Run the control-core self-test; return 'PASS/FAIL: ...' + check lines."""
+    import builtins
+    for p in ("apps/a", "apps/b"):
+        try:
+            sys.path.insert(0, p)
+        except Exception:
+            pass
+    import selftest
+    captured = []
+    real_print = builtins.print
+    builtins.print = lambda *values, **_kw: captured.append(
+        " ".join(str(value) for value in values))
+    try:
+        ok = selftest.run()
+    except Exception as e:
+        ok = False
+        captured.append("error: %s" % e)
+    finally:
+        builtins.print = real_print
+    detail = "\n".join(captured[-30:])
+    verdict = "PASS" if ok else "FAIL"
+    return "%s: control core self-test%s" % (
+        verdict, ("\n" + detail) if detail else "")
+
+
 async def main():
     logger.info("App: main entered.", log_to_file=True)
 
@@ -107,15 +134,19 @@ async def main():
     else:
         logger.info("App: no Wi-Fi SSID configured; running offline.")
 
-    # Network service (status / debug / update over Wi-Fi, no USB needed).
-    # Started as a one-shot task; it serves until the loop is torn down. A failure
-    # here is isolated to that task and cannot take down the control loop.
+    # Remote shell (framework service on the standard telnet port): status,
+    # log, heap, reboot, repl built-ins + the app self-test. Started as a
+    # one-shot task; a failure here is isolated to that task and cannot take
+    # down the control loop.
     if config.get("net_enabled") and has_ssid:
-        from net_service import NetService
+        from lib.coresys.telnet_service import TelnetService
+        shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
+                              name="otc")
+        shell.add("selftest", _run_selftest, "run the control-core self-test")
         tasks.create_task(
-            NetService(wifi).start(), task_id="net_service",
-            description="network status/debug/update service")
-        logger.info("App: network service task started.")
+            shell.start(), task_id="net_service",
+            description="remote shell (status/log/reboot/repl + selftest)")
+        logger.info("App: remote shell service task started.")
 
     # App domain config + state (Step 1): validate and log the boot snapshot.
     config.validate()

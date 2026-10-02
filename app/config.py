@@ -64,10 +64,9 @@ DEFAULTS = {
     "mqtt_user": "",
     "mqtt_pass": "",
     "mqtt_base_topic": "otc/boiler",
-    # Network service (remote status / debug / update -- no USB needed)
+    # Remote shell (framework service: status / log / reboot / repl + selftest)
     "net_enabled": True,
-    "http_port": 8080,          # status / log / reboot / selftest
-    "console_port": 8081,       # line-based debug console (raw TCP)
+    "net_port": 23,             # telnet-style shell (standard telnet port)
     # Optional static IP (empty = DHCP). Set all four, or none.
     "net_ip": "",
     "net_mask": "",

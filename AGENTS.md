@@ -8,8 +8,8 @@ verified on the real Pico 2W and prevent several misleading failure modes.
 All generic device tooling lives in the `micropy-system` framework submodule
 (`micropy-system/tools/`):
 
-**Device lifecycle:** `device.py` (USB CLI), `console.py` (network REPL),
-`discover.py` (LAN scanner), `net.sh` (HTTP API client),
+**Device lifecycle:** `device.py` (USB CLI), `telnet.py` (shell client),
+`discover.py` (LAN scanner), `net.sh` (shell command wrapper),
 `render_config.py` (config resolution), `provision.sh` (USB provisioning
 engine), `assemble.py` (device-tree builder).
 
@@ -46,16 +46,20 @@ submodule pointer; never fork framework tools back into the project.
 
 Current network validation surfaces (default device IP observed: `10.9.30.76`):
 
+The device runs the framework's remote shell (telnet-style line commands)
+on the standard telnet port (23):
+
 ```sh
-curl http://10.9.30.76:8080/status
-curl 'http://10.9.30.76:8080/log?n=40'
-curl -X POST http://10.9.30.76:8080/selftest
-python micropy-system/tools/console.py 10.9.30.76 8081
-curl -X POST http://10.9.30.76:8080/reboot
+python micropy-system/tools/telnet.py 10.9.30.76 status
+python micropy-system/tools/telnet.py 10.9.30.76 log 40
+python micropy-system/tools/telnet.py 10.9.30.76 selftest
+python micropy-system/tools/telnet.py 10.9.30.76      # interactive (try 'repl')
+python micropy-system/tools/telnet.py 10.9.30.76 reboot
+# or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
 ```
 
-A reboot runs the boot-time OTA check first, so HTTP may be unavailable for
-several seconds. Retry before concluding that WiFi failed.
+A reboot runs the boot-time OTA check first, so the shell may be unavailable
+for several seconds. Retry before concluding that WiFi failed.
 
 ## Known-good deployment workflow
 
@@ -65,11 +69,11 @@ several seconds. Retry before concluding that WiFi failed.
 ```
 
 Network mode bumps the app version, builds, serves the update, reboots the
-board over HTTP (`POST /reboot` triggers the boot-time OTA check), polls
-`GET /status` for A/B promotion, and runs the self-test over HTTP. The app is
-never interrupted, so no final reset is needed. `--usb` keeps the legacy
-mpremote path and performs the required final reset after its USB self-test.
-Once it prints `DEPLOY OK`, validate over HTTP/TCP only.
+board over its shell (the `reboot` command triggers the boot-time OTA
+check), polls `status` for A/B promotion, and runs the self-test over the
+shell. The app is never interrupted, so no final reset is needed. `--usb`
+keeps the legacy mpremote path and performs the required final reset after
+its USB self-test. Once it prints `DEPLOY OK`, validate over the shell only.
 
 Commit after each logical, device-verified step. Do not include unrelated
 working-tree changes (e.g. `app/version.txt` after a deploy auto-bump).
@@ -197,7 +201,8 @@ Verified on the installed MicroPython 1.29.0 build:
 - This build has no `sys.stdout` attribute. Do not capture output by assigning
   `sys.stdout`; use callbacks or an injected `print` function instead.
 - The serial console may be silent. Persistent evidence must use
-  `logger.info(..., log_to_file=True)` and can then be read through `/log`.
+  `logger.info(..., log_to_file=True)` and can then be read through the
+  shell's `log` command (`telnet.py <ip> log 40`).
 
 ## Framework ownership rules
 
@@ -215,7 +220,10 @@ Verified on the installed MicroPython 1.29.0 build:
 
 - Network diagnostics milestone: commit `a91ac76`, device firmware `1.1.13`.
   `/status`, bounded `/log`, `/selftest`, TCP console, `/reboot`, and post-reboot
-  WiFi recovery were verified on-device.
+  WiFi recovery were verified on-device. (This HTTP surface was later replaced
+  by the framework's remote shell on port 23 — `telnet_service.py` — keeping
+  the same capabilities as line commands: `status`, `log N`, `selftest`,
+  `reboot`, `repl`, `help`.)
 - Boiler transport abstraction: commit `f8fca84`, device firmware `1.1.14`.
   The log transport's ON -> release -> stale-setpoint reset -> ON command
   sequence passed on host and through the Pico network console.
