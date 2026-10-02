@@ -46,9 +46,9 @@ class Controller:
     accumulator, last tick time, on/off latch, last sent flow). ``heating_on``
     is seeded from the persisted flag (``state.py``) at boot; the *device layer*
     is responsible for persisting the emitted ``heating_on`` and for applying the
-    decision to the transport. On a candidate boot (``state.candidate_boot``)
-    the device layer must NOT issue physical actuation -- see ``state.py`` for
-    the contract.
+    decision to the transport. While ``state.candidate_boot`` or
+    ``state.post_failed`` is set the device layer must NOT issue physical
+    actuation -- see ``state.py`` for the contract.
     """
 
     def __init__(self, initial_heating_on=False):

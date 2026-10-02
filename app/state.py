@@ -10,13 +10,18 @@ Persisted to a small ``state.json`` and written ONLY on an OFF<->HEATING
 transition, using the framework's atomic temp-file + rename pattern. Device-only
 (depends on the framework logger).
 
-Candidate-boot contract (A/B safety): the boot that follows an OTA install is
-supervised and reboots ~1-2 s after ``main()`` confirms the slot. The device
-layer must NOT issue non-idempotent physical actuation (boiler ON/OFF, setpoint
-release) while ``State.candidate_boot`` is set -- the boiler's last state
-naturally persists across the confirmation reboot, and the ACTIVE boot applies
-the first real decision. ``candidate_boot`` is runtime-only and never
-persisted.
+Boot contracts (A/B safety):
+* **Candidate boot** -- the boot that follows an OTA install is supervised and
+  reboots ~1-2 s after ``main()`` confirms the slot. The device layer must NOT
+  issue non-idempotent physical actuation (boiler ON/OFF, setpoint release)
+  while ``State.candidate_boot`` is set -- the boiler's last state naturally
+  persists across the confirmation reboot, and the ACTIVE boot applies the
+  first real decision.
+* **POST** -- ``main()`` runs the power-on self-test (``post.py``) BEFORE slot
+  confirmation. A failing candidate never confirms, so the watchdog rolls it
+  back and quarantines the version. A failing ACTIVE slot enters degraded
+  mode: ``State.post_failed`` is set (actuation held, services up, no reboot).
+``candidate_boot`` and ``post_failed`` are runtime-only and never persisted.
 """
 
 import json
@@ -37,6 +42,10 @@ class State:
         # after an OTA apply. The device layer holds physical actuation while it
         # is set; see the module docstring.
         self.candidate_boot = False
+        # Runtime-only (never persisted): True when the boot-time POST failed
+        # on the active slot (degraded mode). Actuation is held; the app keeps
+        # its services up for diagnosis and never reboots on its own.
+        self.post_failed = False
         self._load()
 
     def _load(self):

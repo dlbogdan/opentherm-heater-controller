@@ -3,8 +3,10 @@
 This is **Step 0** of the build plan: the boot skeleton + framework harness. It
 establishes the three things every later step builds on:
 
-* **A/B slot confirmation** — done *first* so it lands inside the 12 s candidate
-  confirmation window enforced by the hardware watchdog (see ``watchdog.py``).
+* **A/B slot confirmation** — gated on the **power-on self-test** (``post.py``):
+  a candidate that passes POST confirms inside the 12 s candidate window
+  enforced by the hardware watchdog (see ``watchdog.py``); one that fails never
+  confirms, so the watchdog rolls it back and quarantines the version.
 * **Wi-Fi** (optional, non-fatal) — kicked off non-blocking and driven to
   completion by a 500 ms keepalive task; the control core runs fine with it off.
 * **The scheduler** — a ``TaskManager`` whose periodic tasks are the single place
@@ -38,28 +40,27 @@ from lib.coresys.manager_tasks import TaskManager
 # work (the modules themselves only expose the class + instance).
 from config import config
 from state import state
+import post
 
 
-def _confirm_running_slot():
-    """Promote a candidate slot (no-op on the active slot).
-
-    Runs before any blocking I/O so it is comfortably inside the 12 s candidate
-    window. On a candidate boot the framework's watchdog feed loop then performs
-    one clean reboot so we return as an ordinary (un-supervised) slot.
+def _sample_boot_slot():
+    """Read the A/B state and flag a candidate boot; returns the running slot.
 
     The candidate flag must be sampled BEFORE confirming (confirmation clears
     ``pending``): while ``state.candidate_boot`` is set the device layer holds
-    non-idempotent physical actuation -- this boot lives ~1-2 s and reboots.
+    non-idempotent physical actuation -- this boot is supervised and reboots
+    ~1-2 s after confirmation. Slot confirmation itself is deferred to AFTER
+    the power-on self-test (see ``main()``) and still lands inside the 12 s
+    candidate window.
     """
     pre = load_state()
-    candidate_boot = pre["pending"] is not None
     running_slot = pre["pending"] or pre["active"]
-    confirm_running_slot(running_slot)
-    state.candidate_boot = candidate_boot
+    state.candidate_boot = pre["pending"] is not None
     logger.info(
-        "App: running as slot '%s' (confirmed)%s."
+        "App: running as slot '%s'%s."
         % (running_slot,
-           " [candidate boot - holding actuation]" if candidate_boot else ""),
+           " [candidate boot - holding actuation]"
+           if state.candidate_boot else ""),
         log_to_file=True)
     return running_slot
 
@@ -122,11 +123,18 @@ def _run_selftest(_args=""):
         verdict, ("\n" + detail) if detail else "")
 
 
+def _run_post(_args=""):
+    """Run the power-on self-test on demand; return the verdict line."""
+    result = post.run_post(config, state)
+    return "%s: %s" % ("PASS" if result.ok else "FAIL", result.summary())
+
+
 async def main():
     logger.info("App: main entered.", log_to_file=True)
 
-    # 1. Slot confirmation FIRST (the WDT candidate window is only 12 s).
-    _confirm_running_slot()
+    # 1. Sample the A/B state FIRST: on a candidate boot the actuation hold
+    #    must be in force before anything else (this boot is supervised).
+    running_slot = _sample_boot_slot()
 
     # 2. Framework harness: config + Wi-Fi + scheduler.
     sys_config = ConfigManager("/system-config.json")
@@ -154,13 +162,14 @@ async def main():
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
+        shell.add("post", _run_post, "run the power-on self-test")
         tasks.create_task(
             shell.start(), task_id="net_service",
             description="remote shell (status/log/reboot/repl + selftest)")
         logger.info("App: remote shell service task started.")
 
     # App domain config + state (Step 1): validate and log the boot snapshot.
-    config.validate()
+    config_problems = config.validate()
     logger.info(
         "App: t_off=%s t_on=%s flow[%s..%s] min_on=%s design=%s/%s transport=%s"
         " | heating_on=%s"
@@ -169,7 +178,35 @@ async def main():
            config.get("flow_design"), config.get("t_design"),
            config.get("transport"), state.heating_on))
 
-    # 4. Heartbeat -- the serial-console test surface for Step 0.
+    # 4. POWER-ON SELF-TEST (the A/B gate) -- runs BEFORE slot confirmation
+    #    so a failing candidate never confirms. All checks are local and fast,
+    #    keeping the confirm (below) inside the 12 s candidate window.
+    post_result = post.run_post(config, state,
+                                config_problems=config_problems)
+    if post_result.ok:
+        confirm_running_slot(running_slot)
+        logger.info(
+            "App: slot '%s' confirmed after POST."
+            % (running_slot,), log_to_file=True)
+    elif state.candidate_boot:
+        # Candidate + POST failure: do NOT confirm -- the watchdog's candidate
+        # window rolls this slot back and quarantines the version. The shell
+        # stays up for a quick look, then idle so the watchdog does its job.
+        logger.error(
+            "POST failed on candidate boot -- not confirming; watchdog will "
+            "roll back and quarantine this version.", log_to_file=True)
+        while True:
+            await asyncio.sleep(1.0)
+    else:
+        # Active slot + POST failure: degraded mode -- services stay up for
+        # diagnosis, actuation is held, and the app never reboots (a reboot
+        # would just repeat the same failing boot).
+        state.post_failed = True
+        logger.error(
+            "POST failed on active boot %s -- degraded mode: actuation held, "
+            "services up for diagnosis." % (running_slot,), log_to_file=True)
+
+    # 5. Heartbeat -- the serial-console test surface for Step 0.
     #    The FIRST heartbeat is also file-logged so a live boot leaves evidence
     #    in /log.txt even when we cannot watch the console.
     start_ms = time.ticks_ms()
@@ -194,7 +231,7 @@ async def main():
     logger.info(
         "App: Step 0 + 1 harness ready; entering main loop.", log_to_file=True)
 
-    # 5. Keep the uasyncio loop alive; periodic tasks do the recurring work.
+    # 6. Keep the uasyncio loop alive; periodic tasks do the recurring work.
     #    (uasyncio has no sleep_ms -- sleep() takes fractional seconds.)
     while True:
         await asyncio.sleep(1.0)
