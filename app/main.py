@@ -3,10 +3,13 @@
 This is **Step 0** of the build plan: the boot skeleton + framework harness. It
 establishes the three things every later step builds on:
 
-* **A/B slot confirmation** — gated on the **power-on self-test** (``post.py``):
-  a candidate that passes POST confirms inside the 12 s candidate window
-  enforced by the hardware watchdog (see ``watchdog.py``); one that fails never
-  confirms, so the watchdog rolls it back and quarantines the version.
+* **A/B slot confirmation** — owned by the **framework launcher** (see
+  ``micropy-system/src/slot_main.py`` + ``lib/coresys/post.py``): it runs the
+  power-on self-test (framework checks + this app's ``post_checks()`` hook)
+  BEFORE a candidate may confirm; a passing candidate is confirmed inside the
+  12 s watchdog window, a failing one is rolled back and quarantined. This app
+  only *supplies* domain checks (``post_checks`` / ``post.py``) and *reads* the
+  boot context (``is_candidate_boot`` / ``is_degraded``) to hold actuation.
 * **Wi-Fi** (optional, non-fatal) — kicked off non-blocking and driven to
   completion by a 500 ms keepalive task; the control core runs fine with it off.
 * **The scheduler** — a ``TaskManager`` whose periodic tasks are the single place
@@ -29,8 +32,6 @@ import gc
 import uasyncio as asyncio
 
 import lib.coresys.logger as logger
-from lib.coresys.ota_state import load_state
-from lib.coresys.slot_manager import confirm_running_slot
 from lib.coresys.manager_config import ConfigManager
 from lib.coresys.manager_wifi import WiFiManager
 from lib.coresys.manager_tasks import TaskManager
@@ -43,26 +44,15 @@ from state import state
 import post
 
 
-def _sample_boot_slot():
-    """Read the A/B state and flag a candidate boot; returns the running slot.
+def post_checks():
+    """Guest POST hook for the framework harness (``lib/coresys/post.py``).
 
-    The candidate flag must be sampled BEFORE confirming (confirmation clears
-    ``pending``): while ``state.candidate_boot`` is set the device layer holds
-    non-idempotent physical actuation -- this boot is supervised and reboots
-    ~1-2 s after confirmation. Slot confirmation itself is deferred to AFTER
-    the power-on self-test (see ``main()``) and still lands inside the 12 s
-    candidate window.
+    The framework launcher calls this (via ``run_post``) on every boot, BEFORE
+    a candidate may confirm. It returns the list of ``(name, ok, detail)``
+    domain checks; the free-heap check is the framework's default. See
+    ``app/post.py`` for the check implementations.
     """
-    pre = load_state()
-    running_slot = pre["pending"] or pre["active"]
-    state.candidate_boot = pre["pending"] is not None
-    logger.info(
-        "App: running as slot '%s'%s."
-        % (running_slot,
-           " [candidate boot - holding actuation]"
-           if state.candidate_boot else ""),
-        log_to_file=True)
-    return running_slot
+    return post.checks(config, state)
 
 
 def _make_wifi(sys_config):
@@ -125,16 +115,32 @@ def _run_selftest(_args=""):
 
 def _run_post(_args=""):
     """Run the power-on self-test on demand; return the verdict line."""
-    result = post.run_post(config, state)
+    from lib.coresys import post as framework_post
+
+    class _Hook(object):
+        def post_checks(self):
+            return post.checks(config, state)
+
+    result = framework_post.run_post(_Hook())
     return "%s: %s" % ("PASS" if result.ok else "FAIL", result.summary())
 
 
 async def main():
     logger.info("App: main entered.", log_to_file=True)
 
-    # 1. Sample the A/B state FIRST: on a candidate boot the actuation hold
-    #    must be in force before anything else (this boot is supervised).
-    running_slot = _sample_boot_slot()
+    # 1. Boot context (set by the framework launcher BEFORE main() is called,
+    #    after it ran the POST and made the confirm/rollback decision): on a
+    #    supervised candidate boot or a degraded active boot the device layer
+    #    holds non-idempotent physical actuation. See lib/coresys/post.py.
+    from lib.coresys import post as framework_post
+    state.candidate_boot = framework_post.is_candidate_boot()
+    state.post_failed = framework_post.is_degraded()
+    if state.candidate_boot:
+        logger.info("App: [candidate boot - holding actuation].",
+                    log_to_file=True)
+    elif state.post_failed:
+        logger.error("App: [degraded - POST failed, holding actuation].",
+                     log_to_file=True)
 
     # 2. Framework harness: config + Wi-Fi + scheduler.
     sys_config = ConfigManager("/system-config.json")
@@ -168,8 +174,9 @@ async def main():
             description="remote shell (status/log/reboot/repl + selftest)")
         logger.info("App: remote shell service task started.")
 
-    # App domain config + state (Step 1): validate and log the boot snapshot.
-    config_problems = config.validate()
+    # 3. App domain config + state (Step 1): log the boot snapshot. (config is
+    #    already validated and reset-to-defaults by the framework POST's config
+    #    check, which ran before main() was called.)
     logger.info(
         "App: t_off=%s t_on=%s flow[%s..%s] min_on=%s design=%s/%s transport=%s"
         " | heating_on=%s"
@@ -178,35 +185,7 @@ async def main():
            config.get("flow_design"), config.get("t_design"),
            config.get("transport"), state.heating_on))
 
-    # 4. POWER-ON SELF-TEST (the A/B gate) -- runs BEFORE slot confirmation
-    #    so a failing candidate never confirms. All checks are local and fast,
-    #    keeping the confirm (below) inside the 12 s candidate window.
-    post_result = post.run_post(config, state,
-                                config_problems=config_problems)
-    if post_result.ok:
-        confirm_running_slot(running_slot)
-        logger.info(
-            "App: slot '%s' confirmed after POST."
-            % (running_slot,), log_to_file=True)
-    elif state.candidate_boot:
-        # Candidate + POST failure: do NOT confirm -- the watchdog's candidate
-        # window rolls this slot back and quarantines the version. The shell
-        # stays up for a quick look, then idle so the watchdog does its job.
-        logger.error(
-            "POST failed on candidate boot -- not confirming; watchdog will "
-            "roll back and quarantine this version.", log_to_file=True)
-        while True:
-            await asyncio.sleep(1.0)
-    else:
-        # Active slot + POST failure: degraded mode -- services stay up for
-        # diagnosis, actuation is held, and the app never reboots (a reboot
-        # would just repeat the same failing boot).
-        state.post_failed = True
-        logger.error(
-            "POST failed on active boot %s -- degraded mode: actuation held, "
-            "services up for diagnosis." % (running_slot,), log_to_file=True)
-
-    # 5. Heartbeat -- the serial-console test surface for Step 0.
+    # 4. Heartbeat -- the serial-console test surface for Step 0.
     #    The FIRST heartbeat is also file-logged so a live boot leaves evidence
     #    in /log.txt even when we cannot watch the console.
     start_ms = time.ticks_ms()
@@ -231,7 +210,7 @@ async def main():
     logger.info(
         "App: Step 0 + 1 harness ready; entering main loop.", log_to_file=True)
 
-    # 6. Keep the uasyncio loop alive; periodic tasks do the recurring work.
+    # 5. Keep the uasyncio loop alive; periodic tasks do the recurring work.
     #    (uasyncio has no sleep_ms -- sleep() takes fractional seconds.)
     while True:
         await asyncio.sleep(1.0)
