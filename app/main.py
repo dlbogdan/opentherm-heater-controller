@@ -170,38 +170,56 @@ async def main():
     controller = Controller(initial_heating_on=state.heating_on)
     sensor_source = make_sensor_source(config, log=log, warn=warn)
 
-    # Room model (arch §3.4): the (slow) CCU3 setpoint/actual pass runs in its
-    # OWN periodic task and caches the aggregate (demand + per-room). The fast
+    # Room model (arch §3.4): the (slow) setpoint/actual pass runs in its OWN
+    # periodic task and caches the aggregate (demand + per-room). The fast
     # control loop reads the cached demand + the weather (t_out/lux), so it
-    # never does a 40s CCU3 pass. All CCU3 I/O is async (non-blocking).
-    rooms = None
-    if config.get("ccu3_url"):
-        from heating_groups import HeatingGroups
-        rooms = HeatingGroups(config, log=log, warn=warn)
+    # never does a slow pass. The concrete source (CCU3 heating groups, or
+    # none) is chosen by the factory -- main.py stays backend-agnostic, exactly
+    # as with the weather source above. All I/O is async (non-blocking).
+    # The framework fires each periodic task's FIRST tick immediately at boot,
+    # which is before Wi-Fi has connected -- that used to fire a CCU3 read and
+    # fail with EHOSTUNREACH (logged as a warning). Gate the network I/O on the
+    # Wi-Fi being up so the first tick that runs is one that can succeed; the
+    # next interval retries once connected. (A gateway ping would be a stricter
+    # check, but is_up() already excludes the "not connected yet" window.)
+    def _net_up():
+        try:
+            return bool(wifi.is_up())
+        except Exception:
+            return False
 
+    from rooms import make_rooms_source
+    rooms = make_rooms_source(config, log=log, warn=warn)
+    if rooms.enabled:
         async def rooms_tick():
+            if not _net_up():
+                return  # Wi-Fi not up yet -- skip (no I/O, no warning)
             try:
                 await rooms.read()
             except Exception as exc:  # contain; the next poll retries
                 warn("Rooms: poll failed: %s" % exc)  # error -> to flash
 
-        rooms_poll_s = int(config.get("rooms_poll_s"))
         tasks.create_periodic_task(
-            rooms_tick, interval_ms=rooms_poll_s * 1000, task_id="rooms",
-            description="CCU3 room pass (setpoints/actuals -> demand)",
+            rooms_tick, interval_ms=rooms.poll_s * 1000, task_id="rooms",
+            description="room pass (setpoints/actuals -> demand)",
             is_coroutine=True)
-        logger.info("App: rooms poll started (every %ds)." % rooms_poll_s)
+        logger.info("App: rooms poll started (every %ds)." % rooms.poll_s)
 
     async def control_tick():
         # Fetch the (possibly I/O-bound) weather reading first -- the only
         # async part of this tick; the pure tick below stays sync + testable.
-        t_out, lux, _ = await sensor_source.read()
-        # Demand (0..1) from the cached room aggregate, else None (disabled).
+        # Gate it on the Wi-Fi being up so the immediate first tick (before
+        # connect) degrades to failsafe instead of firing a failing read.
+        if _net_up():
+            t_out, lux, _ = await sensor_source.read()
+        else:
+            t_out, lux = None, None
+        # Demand (0..1) from the cached room aggregate; the null source (no
+        # room data configured) yields None -> the control loop runs on weather.
         demand = None
-        if rooms is not None:
-            agg = rooms.last()
-            if agg and agg.get("demand_pct") is not None:
-                demand = agg["demand_pct"] / 100.0
+        agg = rooms.last()
+        if agg and agg.get("demand_pct") is not None:
+            demand = agg["demand_pct"] / 100.0
 
         def read_sensors():
             return (t_out, lux, demand)
@@ -244,8 +262,7 @@ async def main():
                                     register_transport_commands)
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
-        if rooms is not None:
-            register_rooms_commands(shell, rooms)
+        register_rooms_commands(shell, rooms)
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",
