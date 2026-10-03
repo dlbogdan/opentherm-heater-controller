@@ -30,7 +30,5 @@ jobs:
       - name: Run pinned framework tests
         working-directory: micropy-system
         run: python -m unittest discover -s tests -q
-      - name: Check shell syntax
-        run: find micropy-system -type f -name '*.sh' -exec sh -n {} +
       - name: Build firmware
-        run: ./micropy-system/tools/build_firmware.sh
+        run: ./micropy-system/tools/build_firmware.py

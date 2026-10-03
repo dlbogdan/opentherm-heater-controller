@@ -6,22 +6,22 @@ This application uses `micropy-system` as a pinned Git submodule.
 
 ```sh
 # One-time local toolchain setup
-micropy-system/tools/setup_build_env.sh
+micropy-system/tools/setup_build_env.py
 
 # Assemble and build app/version.txt for Pico 2 W
-micropy-system/tools/build_firmware.sh
+micropy-system/tools/build_firmware.py
 
 # Build an explicit version/model locally
-micropy-system/tools/build_firmware.sh 1.0.1 pico2-w-rp2350
+micropy-system/tools/build_firmware.py 1.0.1 pico2-w-rp2350
 
 # Serve build/ over local HTTP, then use the printed OTA URL as DIRECT_BASE_URL
-micropy-system/tools/serve_update.sh
+micropy-system/tools/serve_update.py
 
 # Update the framework checkout; review and commit its pointer afterward
-micropy-system/tools/update_framework.sh
+micropy-system/tools/update_framework.py
 
 # Trigger the GitHub release workflow by pushing a clean annotated tag
-micropy-system/tools/release_github.sh 1.0.1
+micropy-system/tools/release_github.py 1.0.1
 ```
 
 For a manual GitHub run, open **Actions → Build firmware release → Run
