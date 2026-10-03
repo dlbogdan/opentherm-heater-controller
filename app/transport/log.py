@@ -1,4 +1,13 @@
-"""Recording boiler transport for hardware-free integration and diagnostics."""
+"""Bounded in-memory audit decorator in front of a transport driver.
+
+``LogTransport`` wraps any ``BoilerTransport`` driver (``DummyTransportDrv``,
+later ``OTGWTransportDrv`` / ``OTDirectTransportDrv``) and records every
+high-level API call plus the protocol-level events the driver reports through
+its trace sink. Storage is a fixed 16-byte-per-record binary ring
+(``transport.audit``) -- RAM use is exactly ``capacity * 16`` bytes, it never
+grows, and nothing touches flash unless a diagnostic explicitly saves a
+snapshot. Readable JSON/text is decoded on demand by the shell callbacks.
+"""
 
 try:
     import ujson as json
@@ -8,118 +17,206 @@ try:
     import uos as os
 except ImportError:  # CPython host tests
     import os
-import time
+try:
+    import ustruct as struct
+except ImportError:
+    import struct
 
-from transport.base import BoilerTransport, TransportHealth
+from transport.audit import (API_RELEASE_OVERRIDE, API_SET_FLOW_TARGET,
+                             API_SET_HEATING, AuditRing, DEFAULT_CAPACITY,
+                             KIND_API_CALL, KIND_OTGW_ACK,
+                             KIND_OTGW_COMMAND, KIND_OT_RX, KIND_OT_TX,
+                             KIND_TRANSPORT_ERROR, RECORD_FORMAT,
+                             RESULT_EXCEPTION, RESULT_OK, RESULT_REJECTED,
+                             decode_record, otgw_encode, ticks_diff, ticks_ms)
+
+JSON_SNAPSHOT = "/transport-events.jsonl"
+RAW_SNAPSHOT = "/transport-events.otlog"
 
 
-DEFAULT_HISTORY_SIZE = 64
-DEFAULT_SNAPSHOT_PATH = "/transport-events.jsonl"
+class LogTransport(object):
+    """Records API calls + driver protocol events; delegates all I/O."""
 
+    def __init__(self, driver, capacity=DEFAULT_CAPACITY):
+        self.driver = driver
+        self.ring = AuditRing(capacity)
+        if hasattr(driver, "set_trace_sink"):
+            driver.set_trace_sink(self)
 
-def _ticks_ms():
-    if hasattr(time, "ticks_ms"):
-        return time.ticks_ms()
-    return int(time.monotonic() * 1000)
+    # -- driver trace sink ---------------------------------------------------
+    def record_ot_tx(self, frame, coalesce=True):
+        self.ring.append(KIND_OT_TX, int(frame) & 0xFFFFFFFF,
+                         coalesce=coalesce)
 
+    def record_ot_rx(self, frame):
+        self.ring.append(KIND_OT_RX, int(frame) & 0xFFFFFFFF)
 
-class LogTransport(BoilerTransport):
-    """A bounded in-memory command recorder with synthetic telemetry."""
+    def record_otgw_command(self, cmd, value=0):
+        self.ring.append(KIND_OTGW_COMMAND, otgw_encode(cmd, value))
 
-    def __init__(self, history_size=DEFAULT_HISTORY_SIZE):
-        self.history_size = max(1, int(history_size))
-        # Backward-compatible tuple history used by the existing self-test.
-        self.commands = []
-        # Structured events are intended for diagnostics and shell export.
-        self.events = []
-        self.last_tick_ms = None
-        self._flow_temp = None
-        self._return_temp = None
-        self._modulation = None
-        self._health = TransportHealth.OK
-        self._sequence = 0
+    def record_otgw_ack(self, cmd):
+        self.ring.append(KIND_OTGW_ACK, otgw_encode(cmd))
 
-    def _record(self, command, value=None, has_value=True):
-        item = (command, value) if has_value else (command,)
-        self.commands.append(item)
-        self._sequence += 1
-        event = {"seq": self._sequence, "time_ms": _ticks_ms(), "op": command}
-        if has_value:
-            event["value"] = value
-        event["ok"] = True
-        self.events.append(event)
-        overflow = len(self.events) - self.history_size
-        if overflow > 0:
-            del self.events[:overflow]
-            del self.commands[:overflow]
-        return True
+    def record_error(self, code):
+        self.ring.append(KIND_TRANSPORT_ERROR, int(code) & 0xFFFFFFFF,
+                         RESULT_EXCEPTION)
+
+    # -- BoilerTransport delegation (recorded) -------------------------------
+    def _arg_code(self, value):
+        if value is None:
+            return 0
+        if value is True:
+            return 1
+        if value is False:
+            return 0
+        try:
+            return int(round(float(value) * 10.0)) & 0xFFFF
+        except (TypeError, ValueError):
+            return 0
+
+    def _record_api(self, api, arg, ok, started, exception=False):
+        duration = min(4095, ticks_diff(started))
+        try:
+            error = int(self.driver.last_error_code()) & 0xF
+        except Exception:
+            error = 0
+        self.ring.append(
+            KIND_API_CALL, (api << 16) | self._arg_code(arg),
+            (duration << 4) | error,
+            RESULT_OK if ok else (RESULT_EXCEPTION if exception
+                                  else RESULT_REJECTED))
+        if not ok:
+            try:
+                code = int(self.driver.last_error_code()) & 0xFFFFFFFF
+            except Exception:
+                code = 0
+            self.ring.append(KIND_TRANSPORT_ERROR, code,
+                             RESULT_EXCEPTION if exception else RESULT_REJECTED)
 
     def set_heating(self, on):
-        return self._record("set_heating", bool(on))
+        on = bool(on)
+        started = ticks_ms()
+        try:
+            ok = bool(self.driver.set_heating(on))
+        except Exception:
+            self._record_api(API_SET_HEATING, on, False, started,
+                             exception=True)
+            raise
+        self._record_api(API_SET_HEATING, on, ok, started)
+        return ok
 
     def set_flow_target(self, temp_c):
-        return self._record("set_flow_target", temp_c)
+        started = ticks_ms()
+        try:
+            ok = bool(self.driver.set_flow_target(temp_c))
+        except Exception:
+            self._record_api(API_SET_FLOW_TARGET, temp_c, False, started,
+                             exception=True)
+            raise
+        self._record_api(API_SET_FLOW_TARGET, temp_c, ok, started)
+        return ok
 
     def release_override(self):
-        return self._record("release_override", has_value=False)
+        started = ticks_ms()
+        try:
+            ok = bool(self.driver.release_override())
+        except Exception:
+            self._record_api(API_RELEASE_OVERRIDE, None, False, started,
+                             exception=True)
+            raise
+        self._record_api(API_RELEASE_OVERRIDE, None, ok, started)
+        return ok
 
+    # -- BoilerTransport delegation (pass-through, not recorded) -------------
     def read_flow_temp(self):
-        return self._flow_temp
+        return self.driver.read_flow_temp()
 
     def read_return_temp(self):
-        return self._return_temp
+        return self.driver.read_return_temp()
 
     def read_modulation(self):
-        return self._modulation
+        return self.driver.read_modulation()
 
     def health(self):
-        return self._health
+        return self.driver.health()
 
     def tick(self, now_ms):
-        self.last_tick_ms = now_ms
+        return self.driver.tick(now_ms)
 
-    def set_telemetry(self, flow_temp=None, return_temp=None, modulation=None):
-        self._flow_temp = flow_temp
-        self._return_temp = return_temp
-        self._modulation = modulation
-
-    def set_health(self, health):
-        if health not in (TransportHealth.OK, TransportHealth.DEGRADED,
-                          TransportHealth.FAULT):
-            raise ValueError("invalid transport health: %s" % health)
-        self._health = health
-
+    # -- diagnostics ------------------------------------------------------------
     def status(self):
         return {
-            "type": "log",
-            "health": self._health,
-            "command_count": len(self.events),
-            "last_sequence": self._sequence,
-            "last_command": self.commands[-1] if self.commands else None,
-            "flow_temp": self._flow_temp,
-            "return_temp": self._return_temp,
-            "modulation": self._modulation,
-            "last_tick_ms": self.last_tick_ms,
+            "driver": type(self.driver).__name__,
+            "health": self.driver.health(),
+            "events": self.ring.count,
+            "capacity": self.ring.capacity,
+            "dropped": self.ring.dropped,
+            "last_sequence": self.ring.sequence,
+            "last_error": self.driver.last_error_code(),
+            "flow_temp": self.driver.read_flow_temp(),
+            "return_temp": self.driver.read_return_temp(),
+            "modulation": self.driver.read_modulation(),
         }
 
-    def recent_events(self, count=20):
-        count = min(self.history_size, max(1, int(count)))
-        return self.events[-count:]
+    def records(self, limit=None):
+        return self.ring.records(limit)
 
-    def clear_commands(self):
-        self.commands = []
-        self.events = []
+    def recent_events(self, limit=16):
+        return [decode_record(record) for record in self.ring.records(limit)]
 
-    def save_events(self, path=DEFAULT_SNAPSHOT_PATH):
-        """Atomically save the current bounded history as JSON Lines."""
+    @property
+    def commands(self):
+        """API-level (op, value) tuples in order -- legacy compatibility."""
+        out = []
+        for record in self.ring.records():
+            if record[2] != KIND_API_CALL or record[3] != RESULT_OK:
+                continue
+            api = record[4] >> 16
+            raw = record[4] & 0xFFFF
+            if api == API_SET_HEATING:
+                out.append(("set_heating", bool(raw)))
+            elif api == API_SET_FLOW_TARGET:
+                out.append(("set_flow_target", raw / 10.0))
+            elif api == API_RELEASE_OVERRIDE:
+                out.append(("release_override",))
+        return out
+
+    def clear(self):
+        self.ring.clear()
+
+    # -- explicit, opt-in snapshots (never automatic) -------------------------
+    def _atomic_write(self, path, writer):
         temporary = path + ".new"
-        with open(temporary, "w") as output:
-            for event in self.events:
-                output.write(json.dumps(event) + "\n")
-            output.flush()
+        with open(temporary, "wb") as out:
+            writer(out)
+            out.flush()
         try:
             os.remove(path)
         except OSError:
             pass
         os.rename(temporary, path)
-        return len(self.events)
+
+    def save_json(self, path=JSON_SNAPSHOT):
+        count = self.ring.count
+        lines = [json.dumps(decode_record(record)) + "\n"
+                 for record in self.ring.records()]
+
+        def write(out):
+            for line in lines:
+                out.write(line.encode("utf-8"))
+
+        self._atomic_write(path, write)
+        return count
+
+    def save_raw(self, path=RAW_SNAPSHOT):
+        count = self.ring.count
+        chunks = [struct.pack("<I", self.ring.capacity)]
+        chunks.extend(struct.pack(RECORD_FORMAT, *record)
+                      for record in self.ring.records())
+
+        def write(out):
+            for chunk in chunks:
+                out.write(chunk)
+
+        self._atomic_write(path, write)
+        return count

@@ -45,16 +45,27 @@ board, and then use local HTTP OTA normally.
 
 ## Recording transport diagnostics
 
-The application exposes its shared `LogTransport` through the framework shell:
+The control loop writes through a `LogTransport` audit decorator that wraps the
+boiler driver (today `DummyTransportDrv`, later `OTGWTransportDrv` /
+`OTDirectTransportDrv`). Every API call and every protocol event the driver
+reports (OTGW `CH`/`CS` + acknowledgements, raw OpenTherm frames once a
+direct-OT driver exists) lands in a **bounded in-memory ring**: 64 fixed
+16-byte records (1 KB) that never grows and never touches flash. Readable
+text/JSON is decoded on demand, and repeated identical frames (e.g. OpenTherm
+heartbeats) coalesce into one record with a repeat count.
 
 ```sh
 python micropy-system/tools/telnet.py DEVICE_IP transport status
-python micropy-system/tools/telnet.py DEVICE_IP transport commands 20
+python micropy-system/tools/telnet.py DEVICE_IP transport commands 20        # text
+python micropy-system/tools/telnet.py DEVICE_IP transport commands 20 json
+python micropy-system/tools/telnet.py DEVICE_IP transport demo               # smoke-test sequence
 python micropy-system/tools/telnet.py DEVICE_IP transport clear
-python micropy-system/tools/telnet.py DEVICE_IP transport save
+python micropy-system/tools/telnet.py DEVICE_IP transport save json          # -> /transport-events.jsonl
+python micropy-system/tools/telnet.py DEVICE_IP transport save raw           # -> /transport-events.otlog
 ```
 
-History is a bounded 64-event in-memory ring, so recording does not continuously
-write flash. `transport save` explicitly writes an atomic JSON Lines snapshot to
-`/transport-events.jsonl`. The recorder is wired and queryable now; it will begin
-receiving live decisions when the control scheduler is connected in `main.py`.
+`transport save` is opt-in only (atomic top-level-file write, never automatic)
+and exists to preserve a snapshot across a reboot or network loss; day-to-day
+inspection uses `transport commands`. The decorator is wired and live now;
+it will receive real control decisions and gateway traffic as soon as the
+control scheduler and OTGW driver are connected.

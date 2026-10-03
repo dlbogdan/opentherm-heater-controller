@@ -1,6 +1,15 @@
 """Transport-agnostic boiler I/O contract."""
 
 
+# Bounded numeric error codes: small enough to fit in an audit record's
+# 4-bit error field and stable across drivers.
+ERR_NONE = 0
+ERR_TIMEOUT = 1
+ERR_NO_ACK = 2
+ERR_PROTOCOL = 3
+ERR_DISCONNECTED = 4
+
+
 class TransportHealth:
     OK = "ok"
     DEGRADED = "degraded"
@@ -9,6 +18,10 @@ class TransportHealth:
 
 class BoilerTransport:
     """Interface implemented by OTGW, direct-OT, and test transports."""
+
+    def last_error_code(self):
+        """Most recent bounded driver error code (ERR_NONE when healthy)."""
+        return ERR_NONE
 
     def set_heating(self, on):
         raise NotImplementedError

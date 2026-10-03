@@ -10,6 +10,7 @@ if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
 
 from shell_commands import make_transport_handler, register_transport_commands
+from transport.dummy import DummyTransportDrv
 from transport.log import LogTransport
 
 
@@ -21,58 +22,115 @@ class _Shell:
         self.commands[name] = (handler, description)
 
 
-class LogTransportShellTests(unittest.TestCase):
-    def test_history_is_bounded_and_keeps_legacy_commands(self):
-        transport = LogTransport(history_size=2)
-        transport.set_heating(True)
-        transport.set_flow_target(45)
-        transport.release_override()
+def _make(capacity=64):
+    driver = DummyTransportDrv()
+    return driver, LogTransport(driver, capacity=capacity)
 
+
+class LogTransportShellTests(unittest.TestCase):
+    def test_commands_property_is_api_level(self):
+        driver, transport = _make()
+        transport.set_heating(True)
+        transport.set_flow_target(40)
+        transport.release_override()
         self.assertEqual(transport.commands, [
-            ("set_flow_target", 45),
+            ("set_heating", True),
+            ("set_flow_target", 40.0),
             ("release_override",),
         ])
-        self.assertEqual([event["seq"] for event in transport.events], [2, 3])
 
-    def test_shell_status_and_command_export(self):
-        transport = LogTransport()
-        transport.set_heating(True)
-        transport.set_flow_target(42)
+    def test_ring_is_bounded_and_counts_drops(self):
+        driver, transport = _make(capacity=4)
+        for value in (40, 41, 42):
+            transport.set_flow_target(value)
+        self.assertEqual(transport.ring.count, 4)
+        self.assertGreater(transport.ring.dropped, 0)
+        self.assertEqual(transport.ring.capacity, 4)
+
+    def test_repeated_identical_frames_coalesce(self):
+        driver, transport = _make()
+        frame = 0x90000001
+        transport.record_ot_tx(frame)
+        transport.record_ot_tx(frame)
+        transport.record_ot_tx(frame)
+        records = transport.ring.records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0][6], 3)  # repeat_count
+        entry = transport.recent_events(1)[0]
+        self.assertEqual(entry["kind"], "ot_tx")
+        self.assertEqual(entry["repeat"], 3)
+
+    def test_shell_commands_text_and_json(self):
+        driver, transport = _make()
         handler = make_transport_handler(transport)
+        transport.set_flow_target(42)
+
+        text_lines = handler("commands 3").splitlines()
+        self.assertEqual(len(text_lines), 3)
+        self.assertIn("set_flow_target", text_lines[-1])
+        self.assertIn("42", text_lines[-1])
+        self.assertTrue(text_lines[-1].endswith("ok"))
+
+        rows = [json.loads(line)
+                for line in handler("commands 3 json").splitlines()]
+        api = [row for row in rows if row.get("op") == "set_flow_target"]
+        self.assertTrue(api)
+        self.assertEqual(api[-1]["value"], 42)
 
         status = json.loads(handler("status"))
-        self.assertEqual(status["type"], "log")
-        self.assertEqual(status["command_count"], 2)
-        rows = [json.loads(line) for line in handler("commands 1").splitlines()]
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["op"], "set_flow_target")
-        self.assertEqual(rows[0]["value"], 42)
+        self.assertEqual(status["driver"], "DummyTransportDrv")
+        self.assertEqual(status["events"], 3)
+        self.assertEqual(status["health"], "ok")
 
-    def test_clear_and_explicit_snapshot(self):
-        transport = LogTransport()
-        transport.set_heating(True)
+    def test_demo_records_full_sequence(self):
+        driver, transport = _make()
+        handler = make_transport_handler(transport)
+        response = handler("demo")
+        self.assertIn("demo sequence", response)
+        self.assertEqual(transport.commands, [
+            ("set_heating", True),
+            ("set_flow_target", 45.5),
+            ("set_heating", False),
+            ("release_override",),
+        ])
+
+    def test_explicit_snapshots(self):
+        driver, transport = _make()
+        transport.set_flow_target(41)
+        count = transport.ring.count
         with tempfile.TemporaryDirectory() as directory:
-            path = str(Path(directory) / "events.jsonl")
-            handler = make_transport_handler(transport, path)
-            self.assertEqual(handler("save"), "OK: saved 1 events to %s" % path)
-            saved = [json.loads(line) for line in Path(path).read_text().splitlines()]
-            self.assertEqual(saved[0]["op"], "set_heating")
-            self.assertEqual(handler("clear"), "OK: transport history cleared")
-            self.assertEqual(handler("commands"), "(no transport commands)")
+            json_path = str(Path(directory) / "events.jsonl")
+            self.assertEqual(transport.save_json(json_path), count)
+            saved = [json.loads(line)
+                     for line in Path(json_path).read_text().splitlines()]
+            self.assertEqual(len(saved), count)
+            self.assertEqual(saved[-1]["op"], "set_flow_target")
+
+            raw_path = str(Path(directory) / "events.otlog")
+            self.assertEqual(transport.save_raw(raw_path), count)
+            data = Path(raw_path).read_bytes()
+            self.assertEqual(len(data), 4 + 16 * count)
+
+    def test_shell_save_rejects_nested_paths(self):
+        handler = make_transport_handler(_make()[1])
+        self.assertIn("top-level", handler("save json /a/b.jsonl"))
+        self.assertIn("top-level", handler("save raw relative.jsonl"))
 
     def test_registration_uses_telnet_extension_point(self):
         shell = _Shell()
-        transport = LogTransport()
-        register_transport_commands(shell, transport)
-        self.assertIn("transport", shell.commands)
+        register_transport_commands(shell, _make()[1])
         handler, description = shell.commands["transport"]
         self.assertIn("commands", description)
-        self.assertEqual(json.loads(handler(""))["command_count"], 0)
+        self.assertEqual(json.loads(handler("status"))["events"], 0)
 
-    def test_bad_arguments_return_usage(self):
-        handler = make_transport_handler(LogTransport())
+    def test_clear_and_bad_arguments(self):
+        handler = make_transport_handler(_make()[1])
+        transport = _make()[1]
+        transport.set_flow_target(40)
+        self.assertEqual(handler("clear"), "OK: transport ring cleared")
+        self.assertEqual(handler("commands"), "(no transport events)")
+        self.assertTrue(handler("bogus").startswith("usage:"))
         self.assertTrue(handler("commands nope").startswith("usage:"))
-        self.assertTrue(handler("unknown").startswith("usage:"))
 
 
 if __name__ == "__main__":

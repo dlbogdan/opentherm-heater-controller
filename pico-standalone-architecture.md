@@ -47,10 +47,10 @@ state machine, and failsafes are identical in both.
 │  │  (room opt.) │   │  demand_p   │──►│  │  (interface)        │ │  │
 │  └──────────────┘   │  hysteresis │   │  └──────────┬──────────┘ │  │
 │                     │  rate_limit │   │   ┌──────────┴──────────┐ │  │
-│                     │  failsafe   │   │   │ OtwgTransport       │ │  │
+│                     │  failsafe   │   │   │ OTGWTransportDrv    │ │  │
 │                     │  controller │   │   │ (first)             │ │  │
 │                     └──────────────┘   │   ├─────────────────────┤ │  │
-│  ┌──────────────┐   ┌──────────────┐   │   │ DirectOtTransport   │ │  │
+│  ┌──────────────┐   ┌──────────────┐   │   │OTDirectTransportDrv│ │  │
 │  │  ui/         │   │  state.py    │   │   │ (later)             │ │  │
 │  │  display     │   │  config.py   │   │   └─────────────────────┘ │  │
 │  │  buttons     │   └──────────────┘   └─────────────────────────┘  │
@@ -328,9 +328,13 @@ main.py
 │   ├── failsafe.py      ← sensor timeout, frost protect, comm fault
 │   └── controller.py    ← orchestrator: 60 s tick, emits logical decisions
 ├── transport/
-│   ├── base.py          ← BoilerTransport interface + TransportHealth
-│   ├── otgw.py          ← OtwgTransport (first): 30 s override refresh, reconnect
-│   └── direct_ot.py     ← DirectOtTransport (later): PIO Manchester, heartbeat
+│   ├── base.py          ← BoilerTransport interface + TransportHealth + error codes
+│   ├── opentherm.py     ← OpenTherm frame codec (F88/HB values, parity, names)
+│   ├── audit.py         ← fixed 16-byte audit ring + text/JSON decoders
+│   ├── log.py           ← LogTransport: bounded audit decorator over a driver
+│   ├── dummy.py         ← DummyTransportDrv (current): simulated OTGW CH/CS + ack
+│   ├── otgw.py          ← OTGWTransportDrv (first real): 30 s override refresh, reconnect
+│   └── direct_ot.py     ← OTDirectTransportDrv (later): PIO Manchester, heartbeat
 ├── ui/
 │   ├── display.py       ← OLED framebuf (SPI0)
 │   ├── screens.py       ← status / config / failsafe screens

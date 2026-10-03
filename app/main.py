@@ -139,11 +139,14 @@ async def main():
     wifi, has_ssid = _make_wifi(sys_config)
     tasks = TaskManager()
 
-    # Shared recording transport: the shell observes this exact instance and
-    # the future control task will apply its decisions to the same object.
-    # Until physical OTGW wiring lands, it provides a safe integration seam.
+    # Shared audited transport: LogTransport (bounded in-memory ring) wraps
+    # the driver; the shell observes this exact instance and the future
+    # control task will apply its decisions through the same object.
+    # DummyTransportDrv simulates OTGW CH/CS + ack traffic until
+    # OTGWTransportDrv lands.
     from transport.log import LogTransport
-    transport = LogTransport()
+    from transport.dummy import DummyTransportDrv
+    transport = LogTransport(DummyTransportDrv())
 
     if has_ssid:
         _apply_static_ip()  # no-op unless a static IP is configured

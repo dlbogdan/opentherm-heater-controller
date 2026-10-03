@@ -2,6 +2,7 @@
 
 from control.controller import Controller
 from transport.base import apply_decision
+from transport.dummy import DummyTransportDrv
 from transport.log import LogTransport
 
 
@@ -21,7 +22,7 @@ def _params():
 def run():
     params = _params()
     controller = Controller(initial_heating_on=False)
-    transport = LogTransport()
+    transport = LogTransport(DummyTransportDrv())
 
     heat_1 = controller.tick(0, params, 10.0, lux=0.0)
     apply_decision(transport, heat_1, controller)
