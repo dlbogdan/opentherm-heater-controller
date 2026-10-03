@@ -8,15 +8,25 @@ verified on the real Pico 2W and prevent several misleading failure modes.
 All generic device tooling lives in the `micropy-system` framework submodule
 (`micropy-system/tools/`):
 
-**Device lifecycle:** `device.py` (USB CLI), `telnet.py` (shell client),
-`discover.py` (LAN scanner), `net.py` (shell command wrapper),
-`render_config.py` (config resolution), `provision.py` (USB provisioning
-engine), `assemble.py` (device-tree builder).
+Tools are grouped by function under `micropy-system/tools/`
+(`tooling.py` is shared plumbing, not a command):
 
-**Build, release, deploy:** `setup_build_env.py` (venv +
-`requirements-dev.txt`), `build_firmware.py` (assemble + compile + package),
-`serve_update.py` (OTA update server), `release_github.py` (tag + push),
-`deploy.py` (bump → build → serve → OTA → promotion poll → self-test).
+**`target/`** (everything that talks to a Pico): `provision.py` (USB
+provisioning engine), `capture_boot.py` (serial capture across reset),
+`device.py` (USB CLI), `discover.py` (LAN scanner), `telnet.py` (shell
+client), `net.py` (shell command wrapper), `render_config.py` (config
+resolution), `serve_update.py` (OTA update server), `deploy.py` (bump →
+build → serve → OTA → promotion poll → self-test), `capture_baseline.py`
+(hardware reliability baseline).
+
+**`build/`** (host-side toolchain): `setup_build_env.py` (venv +
+`requirements-dev.txt`), `assemble.py` (device-tree builder),
+`build_firmware.py` (assemble + compile + package), `select_stubs.py`
+(IntelliSense stub profile).
+
+**`micropy-wiring/`** (framework and project management): `init_project.py`
+(new-project scaffold), `update_framework.py` (submodule refresh),
+`release_github.py` (tag + push for CI release).
 
 The project ships no tools of its own (there is no `tools/` directory): every
 command above is invoked through the submodule path, e.g.
