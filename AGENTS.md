@@ -217,6 +217,80 @@ Verified on the installed MicroPython 1.29.0 build:
   `logger.info(..., log_to_file=True)` and can then be read through the
   shell's `log` command (`telnet.py <ip> log 40`).
 
+## CCU3 / Homematic data reference (READ THIS before touching sensor data)
+
+> This is the canonical recipe for reading house sensor + heating data from the
+> Homematic CCU3. It has been explained repeatedly and is easy to get wrong --
+> do **not** guess endpoints or value-key names; use this. Verified live against
+> the production CCU3. Implementation: `app/ccu3.py`, `app/heating_groups.py`.
+
+**Endpoint:** `http://10.9.30.10/api/homematic.cgi` (JSON-RPC 2.0 over plain HTTP).
+- The ReGaHd JSON-RPC endpoint is **`/api/homematic.cgi`**. The bare `/api/` path
+  returns **403 Forbidden** -- that is expected, not a credentials problem.
+- One HTTP/1.0 request per connection, no TLS (trusted LAN).
+- Credentials are in `/app-config.json`: `ccu3_user` / `ccu3_pass` (do not
+  hardcode; `ccu3_url` carries the endpoint).
+
+**Auth (per RPC session):**
+1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
+2. Every subsequent call carries `"_session_id_": <id>` inside `params`.
+3. Session expiry = an error with `code == -1` or a message containing
+   `access denied` / `not logged in` / `session` / `nicht angemeldet`.
+   Re-login once and retry the failed call.
+
+**Devices to read (discover once, cache the identity list to flash):**
+- **Outdoor weather station** -- type `HmIP-SWO` (here `HmIP-SWO-PL`,
+  `HmIP-RF/001822698FA221`). On channel `:1`:
+  - `ACTUAL_TEMPERATURE` -> outdoor temp (`t_out`)
+  - `ILLUMINATION` -> `lux`
+  - `WIND_SPEED` -> optional, display only
+- **Heating groups (the main rooms)** -- type **`HmIP-HEATING`**, interface
+  **`VirtualDevices`** (8 rooms: Baie Parter, Clima Bucatarie, Clima Camera
+  Copii N, Clima camera copii S, Clima Dormitor, Clima Garaj, Clima Mansarda,
+  Clima Sufragerie). **These groups -- NOT the individual eTRV valves -- are the
+  "heating groups".** Channel `:1` is `HEATING_CLIMATECONTROL_TRANSCEIVER`
+  (readable + writable):
+  - **`SET_POINT_TEMPERATURE`** -> the room's target temperature (the temp
+    setpoint). This is the **correct, populated** key. *Do NOT use `SETPOINT`
+    (no underscore between SET and POINT) -- that key is valid but **always
+    empty** on every device, which is why setpoints look "missing". The eTRV
+    valves and the HmIP-WTH/STHD/STH thermostats also expose
+    `SET_POINT_TEMPERATURE`; the HmIP-HEATING groups are simply the one-per-room
+    aggregate we want.*
+  - **`ACTUAL_TEMPERATURE`** -> the room's measured actual (always populated).
+
+**Heating demand (the ReGaHd delta recipe):** a room is *demanding* when
+`5 < setpoint < 30` (skip OFF=5 / ON=30 modes) **and** `setpoint > actual`.
+`demand_pct = clamp( (sum_of_demanding_deltas / ALL_thermostats) / delta_cap * 100,
+0, 100)`, `delta_cap` = 3 degC (`demand_delta_cap`). This is what
+`heating_groups.HeatingGroups.read()` returns as `demand_pct`.
+
+**Read a value:** `Interface.getValue` with
+`{"interface": <iface>, "address": "<addr>:1", "valueKey": <KEY>}`. Returns a
+string (e.g. `"23.800000"`) -- parse to float; treat `""`/absent as no value.
+
+**Discovery gotchas (verified on-device):**
+- Some CCU system/virtual devices make the CCU's own `Device.get` handler raise a
+  Tcl error (`unmatched open brace in list`, `device/get.tcl`). **Skip that
+  device and keep scanning** -- never let one bad device abort discovery.
+- `Device.listAll` returns string ids; skip small ids (`<100`) and `"12"`
+  (CCU internals).
+
+**Memory-efficient polling (Pico 2W):** iterate groups **one at a time** -- read
+`SET_POINT_TEMPERATURE` + `ACTUAL_TEMPERATURE` for group *i*, fold into running
+scalars (counts, avg/max setpoint & actual, and the demand aggregates), then
+**drop group *i*'s values before group *i+1***. Never hold a per-group
+list. Only the small group identity list (iface/addr/name) is cached to flash
+(`/ccu3_groups_cache.json`). Per-poll RAM is O(1) in the number of rooms.
+
+**Board-side performance note (verified):** the CCU3 is fast (a host does one
+`getValue` in ~0.16s) but the **Pico is ~2.8s per RPC call** (lwIP +
+MicroPython per-connection overhead; the CCU3 sends no `Content-Length`, so
+the body is read until the server closes). A full 8-room `rooms` pass is ~47s
+and **blocks the board event loop** for its duration. It is an on-demand
+command, not a periodic one. If it must drive the control loop, the CCU3
+client needs to be made non-blocking (uasyncio) first.
+
 ## Framework ownership rules
 
 - Use `lib.coresys.manager_wifi.WiFiManager`; credentials come from

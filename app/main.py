@@ -201,9 +201,16 @@ async def main():
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
         from shell_commands import (register_config_commands,
+                                    register_rooms_commands,
                                     register_transport_commands)
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
+        if config.get("ccu3_url"):
+            from heating_groups import HeatingGroups
+            register_rooms_commands(
+                shell,
+                HeatingGroups(
+                    config, log=lambda m: logger.info(m, log_to_file=True)))
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",

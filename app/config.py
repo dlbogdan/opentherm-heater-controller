@@ -66,6 +66,12 @@ DEFAULTS = {
     "ccu3_pass": "REDACTED-CCU3-PASS",
     "ccu3_weather_type": "HmIP-SWO",
     "ccu3_poll_s": 60,
+    # Heating groups (the main rooms) = the HmIP-HEATING VirtualDevices, NOT the
+    # individual eTRV valves. See AGENTS.md "CCU3 / Homematic data reference".
+    "heating_group_type": "HmIP-HEATING",
+    # Heating-demand saturation: the setpoint-minus-actual delta (deg C) at
+    # which demand reaches 100%. 3.0 matches the working ReGaHd delta script.
+    "demand_delta_cap": 3.0,
     # Home Assistant (arch §12)
     "mqtt_enabled": False,
     "mqtt_broker": "192.168.1.10",

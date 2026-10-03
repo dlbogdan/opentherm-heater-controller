@@ -280,3 +280,36 @@ def register_config_commands(shell, config):
         make_config_handler(config),
         "get [KEY]|set KEY VALUE|reset KEY|list|defaults",
     )
+
+
+# --------------------------------------------------------------------- heating groups
+
+ROOMS_USAGE = "usage: rooms   # one pass over all heating groups (one at a time)"
+
+
+def make_rooms_handler(groups):
+    """Return a shell callback that reads every heating group's setpoint and
+    actual in a single memory-efficient pass (O(1) RAM, one group at a time).
+
+    The CCU3 value-key recipe is documented in AGENTS.md; the collector lives
+    in ``app/heating_groups.py``.
+    """
+
+    def handle(args=""):
+        if args.split():
+            return ROOMS_USAGE
+        try:
+            return json.dumps(groups.read())
+        except Exception as exc:  # surface, don't drop the shell connection
+            return "rooms read failed: %s" % exc
+
+    return handle
+
+
+def register_rooms_commands(shell, groups):
+    """Register the heating-group reader on a framework TelnetService."""
+    shell.add(
+        "rooms",
+        make_rooms_handler(groups),
+        "setpoints + actuals of all heating groups (one at a time)",
+    )

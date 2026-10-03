@@ -114,6 +114,7 @@ python micropy-system/tools/target/telnet.py DEVICE_IP config                # a
 python micropy-system/tools/target/telnet.py DEVICE_IP config get t_on       # one value
 python micropy-system/tools/target/telnet.py DEVICE_IP config set t_on 15    # set + validate
 python micropy-system/tools/target/telnet.py DEVICE_IP config set mqtt_enabled true
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms                 # all heating groups, one at a time
 python micropy-system/tools/target/telnet.py DEVICE_IP config reset t_on     # back to default
 python micropy-system/tools/target/telnet.py DEVICE_IP config defaults       # shipped defaults
 ```
