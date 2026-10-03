@@ -213,9 +213,10 @@ Verified on the installed MicroPython 1.29.0 build:
 - `uasyncio.sleep_ms` exists; `uasyncio.sleep(seconds)` accepts fractions.
 - This build has no `sys.stdout` attribute. Do not capture output by assigning
   `sys.stdout`; use callbacks or an injected `print` function instead.
-- The serial console may be silent. Persistent evidence must use
-  `logger.info(..., log_to_file=True)` and can then be read through the
-  shell's `log` command (`telnet.py <ip> log 40`).
+- The serial console may be silent, so **errors/warnings** are also written
+  to `/log.txt` (read it via the shell's `log` command, `telnet.py <ip> log 40`)
+  — see the **Logging policy** below for the rule of what may be file-logged at
+  all.
 - `bytes.decode()` / `str.encode()` take **no keyword args** in this build:
   `b"HTTP/1.0 200 OK".decode(errors="replace")` raises
   `function doesn't take keyword arguments`. Use a plain `.decode()` (HTTP
@@ -224,6 +225,43 @@ Verified on the installed MicroPython 1.29.0 build:
   loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
   the total free looks sufficient (fragmentation). `gc.collect()` before a
   large read/parse, and **stream** large payloads instead of accumulating them.
+
+## Logging policy (flash-wear constrained — a microcontroller, not a Linux PC)
+
+The log file lives on the LittleFS data partition: every `log_to_file=True`
+write is a flash write, and flash has limited erase cycles. So the app
+keeps file writes to a minimum. The framework logger already enforces half of
+this: `logger.error()` logs to flash **by default**, while `logger.info()` /
+`logger.warning()` / `logger.debug()` do **not** (serial console only unless
+you pass `log_to_file=True`).
+
+**Rule: only WARN / ERROR (and the framework's OTA process) may be written to
+`/log.txt`.** Normal-operation and periodic logs — the `CCU3: t_out=... lux=...`
+weather read, the 10 s heartbeat, one-shot "started" lines — are INFO and go to
+the serial console **only**.
+
+`main.py` makes that explicit and testable by defining two injected callables
+and passing them into every component:
+- `log  = lambda m: logger.info(m)` — INFO, serial console only.
+- `warn = lambda m: logger.warning(m, log_to_file=True)` — WARN/ERROR, to flash.
+
+`ccu3.py`, `heating_groups.py`, `control_loop.py`, and `sensors.py` all accept
+both (`log=`, `warn=`); `warn` falls back to `log` when not supplied, so host
+tests that pass a single `log` still capture errors. Route each log through the
+right one:
+- **INFO (console only):** `CCU3: session established`, `CCU3: t_out=... lux=...`,
+  `CCU3: discovered ...`, `CCU3: endpoint from cache`, `Rooms: N active rooms`,
+  `Sensors: ... -> CCU3`, `App: ... started`, `Control: tick held (candidate/
+  degraded)`.
+- **WARN/ERROR (to flash):** `CCU3: poll failed`, `CCU3: session expired`,
+  `CCU3: last value too stale`, `CCU3: could not write cache`,
+  `Rooms: discovery (attempt) failed`, `Rooms: could not write cache`,
+  `Control: apply_decision/transport.tick failed`, `App: optional service
+  failed`, `App: [candidate boot]`, `App: [degraded]`.
+
+Do **not** "improve" a periodic INFO log back into the file — that is exactly
+the flash wear this policy avoids. Boot evidence is the OTA process (framework,
+file-logged) + `status` + the serial console, not the heartbeat.
 
 ## On-device quirks (verified live; host tests can't catch these)
 

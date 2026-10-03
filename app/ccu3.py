@@ -133,13 +133,15 @@ class Ccu3Rpc:
     payload)``, injectable for host tests; default is the built-in client.
     """
 
-    def __init__(self, url, username, password, http_post=None, log=None):
+    def __init__(self, url, username, password, http_post=None, log=None,
+                 warn=None):
         self.url = url
         self.username = username
         self.password = password
         self._post = (http_post if http_post is not None
                       else _http_post_async)
-        self._log = log
+        self._log = log            # INFO -> console only
+        self._warn = warn if warn is not None else log  # WARN/ERROR -> flash
         self._session = None
         self._next_id = 0
 
@@ -179,9 +181,9 @@ class Ccu3Rpc:
             return await self._raw_call(method, call_params)
         except Ccu3Error as exc:
             if not _retried and _looks_like_session_error(exc):
-                if self._log:
-                    self._log("CCU3: session expired (%s); re-login + retry"
-                              % exc)
+                if self._warn:
+                    self._warn("CCU3: session expired (%s); re-login + retry"
+                               % exc)
                 self._session = None
                 await self.login()
                 return await self.call(method, params, _retried=True)
@@ -201,15 +203,16 @@ class Ccu3SensorSource:
     STALE_LIMIT_S = 600  # last value older than this -> failsafe (t_out=None)
 
     def __init__(self, config, cache_path="/ccu3_cache.json",
-                 http_post=None, sleep=None, log=None):
+                 http_post=None, sleep=None, log=None, warn=None):
         self._config = config
         self._cache_path = cache_path
-        self._log = log
+        self._log = log            # INFO -> console only
+        self._warn = warn if warn is not None else log  # WARN/ERROR -> flash
         self._sleep = sleep if sleep is not None else asyncio.sleep
         self._rpc = Ccu3Rpc(config.get("ccu3_url"),
                             config.get("ccu3_user"),
                             config.get("ccu3_pass"),
-                            http_post=http_post, log=log)
+                            http_post=http_post, log=log, warn=warn)
         self._values = None  # (t_out, lux, ts_ms)
         self._endpoint = None  # (interface, address)
         cache = self._load_cache()
@@ -230,8 +233,8 @@ class Ccu3SensorSource:
         t_out, lux, ts = self._values
         if now - ts > self.STALE_LIMIT_S * 1000:
             self._values = None  # too old to trust: let the controller failsafe
-            if self._log:
-                self._log("CCU3: last value too stale; reporting no reading")
+            if self._warn:
+                self._warn("CCU3: last value too stale; reporting no reading")
             return (None, None, None)
         return (t_out, lux, None)
 
@@ -247,9 +250,9 @@ class Ccu3SensorSource:
             if self._log:
                 self._log("CCU3: t_out=%s lux=%s" % (t_out, lux))
         except Exception as exc:
-            if self._log:
-                self._log("CCU3: poll failed (keeping last value if any): %s"
-                          % exc)
+            if self._warn:
+                self._warn("CCU3: poll failed (keeping last value if any): %s"
+                           % exc)
 
     async def _get_value(self, iface, addr, key):
         result = await self._rpc.call(
@@ -324,5 +327,5 @@ class Ccu3SensorSource:
         except Exception:
             # The cache is an optimization (skip re-discovery); its absence
             # must never break a poll.
-            if self._log:
-                self._log("CCU3: could not write discovery cache")
+            if self._warn:
+                self._warn("CCU3: could not write discovery cache")

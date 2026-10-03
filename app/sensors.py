@@ -34,7 +34,7 @@ class NullSensorSource(SensorSource):
         return (None, None, None)
 
 
-def make_sensor_source(config, log=None):
+def make_sensor_source(config, log=None, warn=None):
     """Select the sensor source from app config (arch §3.5).
 
     ``ccu3``/``auto`` use the CCU3 weather station when ``ccu3_url`` is set
@@ -49,7 +49,7 @@ def make_sensor_source(config, log=None):
         if log:
             log("Sensors: t_out_source=%s -> CCU3 at %s"
                 % (requested, config.get("ccu3_url")))
-        return Ccu3SensorSource(config, log=log)
+        return Ccu3SensorSource(config, log=log, warn=warn)
     if log:
         log("Sensors: t_out_source=%s -> using %s (no live readings)"
             % (requested, NullSensorSource.name))

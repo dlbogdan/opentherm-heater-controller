@@ -119,7 +119,7 @@ def _run_selftest(_args=""):
 
 
 async def main():
-    logger.info("App: main entered.", log_to_file=True)
+    logger.info("App: main entered.")
 
     # 1. Boot context (set by the framework launcher BEFORE main() is called,
     #    after it ran the POST and made the confirm/rollback decision): on a
@@ -129,8 +129,9 @@ async def main():
     state.candidate_boot = framework_post.is_candidate_boot()
     state.post_failed = framework_post.is_degraded()
     if state.candidate_boot:
-        logger.info("App: [candidate boot - holding actuation].",
-                    log_to_file=True)
+        # Safety state (actuation held) -- a warning, so it IS written to flash.
+        logger.warning("App: [candidate boot - holding actuation].",
+                       log_to_file=True)
     elif state.post_failed:
         logger.error("App: [degraded - POST failed, holding actuation].",
                      log_to_file=True)
@@ -161,9 +162,13 @@ async def main():
     from control.controller import Controller
     from control_loop import run_control_tick
     from sensors import make_sensor_source
-    log = lambda m: logger.info(m, log_to_file=True)
+    # Logging policy (microcontroller, flash-wear constrained -- see AGENTS.md):
+    # INFO goes to the serial console only; only WARN/ERROR are written to
+    # /log.txt (the framework's OTA process also writes to the file).
+    log = lambda m: logger.info(m)
+    warn = lambda m: logger.warning(m, log_to_file=True)
     controller = Controller(initial_heating_on=state.heating_on)
-    sensor_source = make_sensor_source(config, log=log)
+    sensor_source = make_sensor_source(config, log=log, warn=warn)
 
     # Room model (arch §3.4): the (slow) CCU3 setpoint/actual pass runs in its
     # OWN periodic task and caches the aggregate (demand + per-room). The fast
@@ -172,21 +177,20 @@ async def main():
     rooms = None
     if config.get("ccu3_url"):
         from heating_groups import HeatingGroups
-        rooms = HeatingGroups(config, log=log)
+        rooms = HeatingGroups(config, log=log, warn=warn)
 
         async def rooms_tick():
             try:
                 await rooms.read()
             except Exception as exc:  # contain; the next poll retries
-                log("Rooms: poll failed: %s" % exc)
+                warn("Rooms: poll failed: %s" % exc)  # error -> to flash
 
         rooms_poll_s = int(config.get("rooms_poll_s"))
         tasks.create_periodic_task(
             rooms_tick, interval_ms=rooms_poll_s * 1000, task_id="rooms",
             description="CCU3 room pass (setpoints/actuals -> demand)",
             is_coroutine=True)
-        logger.info("App: rooms poll started (every %ds)." % rooms_poll_s,
-                    log_to_file=True)
+        logger.info("App: rooms poll started (every %ds)." % rooms_poll_s)
 
     async def control_tick():
         # Fetch the (possibly I/O-bound) weather reading first -- the only
@@ -204,7 +208,7 @@ async def main():
 
         run_control_tick(
             controller, transport, state, config.all(), read_sensors,
-            time.ticks_ms(), log=log)
+            time.ticks_ms(), log=log, warn=warn)
 
     tick_s = int(config.get("control_tick_s"))
     tasks.create_periodic_task(
@@ -213,7 +217,7 @@ async def main():
         is_coroutine=True)
     logger.info(
         "App: control loop started (tick %ds, first tick immediate; actuation "
-        "held on candidate/degraded boot)." % tick_s, log_to_file=True)
+        "held on candidate/degraded boot)." % tick_s)
 
     if has_ssid:
         _apply_static_ip()  # no-op unless a static IP is configured
@@ -222,8 +226,7 @@ async def main():
             wifi.refresh, interval_ms=500, task_id="wifi_keepalive",
             description="Wi-Fi keepalive", is_coroutine=True)
         logger.info(
-            "App: Wi-Fi connect kicked off; keepalive task running.",
-            log_to_file=True)
+            "App: Wi-Fi connect kicked off; keepalive task running.")
     else:
         logger.info("App: no Wi-Fi SSID configured; running offline.")
 
@@ -261,10 +264,10 @@ async def main():
            config.get("transport"), state.heating_on))
 
     # 4. Heartbeat -- the serial-console test surface for Step 0.
-    #    The FIRST heartbeat is also file-logged so a live boot leaves evidence
-    #    in /log.txt even when we cannot watch the console.
+    #    INFO-level: serial console only, never written to flash (see the
+    #    logging policy above). Boot evidence is the OTA process (framework,
+    #    file-logged) plus `status`/the serial console -- not the heartbeat.
     start_ms = time.ticks_ms()
-    first_beat = [True]
 
     def heartbeat():
         gc.collect()
@@ -274,16 +277,16 @@ async def main():
         rssi_str = " %s dBm" % rssi if rssi is not None else ""
         logger.info(
             "Heartbeat: up %ss | heap %s B | wifi %s %s%s"
-            % (uptime_s, gc.mem_free(), wifi.get_state(), ip, rssi_str),
-            log_to_file=first_beat[0])
-        first_beat[0] = False
+            % (uptime_s, gc.mem_free(), wifi.get_state(), ip, rssi_str))
 
     tasks.create_periodic_task(
         heartbeat, interval_ms=10000, task_id="heartbeat",
         description="Step 0 heartbeat", is_coroutine=False)
 
+    # The provisioning boot-marker ("entering main loop") is on the serial
+    # console; it is not written to flash (INFO).
     logger.info(
-        "App: Step 0 + 1 harness ready; entering main loop.", log_to_file=True)
+        "App: Step 0 + 1 harness ready; entering main loop.")
 
     # 5. Keep the uasyncio loop alive; periodic tasks do the recurring work.
     #    (uasyncio has no sleep_ms -- sleep() takes fractional seconds.)

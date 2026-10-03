@@ -16,7 +16,7 @@ from transport.base import apply_decision
 
 
 def run_control_tick(controller, transport, state, params, read_sensors,
-                     now_ms, log=None):
+                     now_ms, log=None, warn=None):
     """Run one control tick. Returns the Decision, or None when held.
 
     * Holds ALL physical actuation while ``state.candidate_boot`` or
@@ -44,7 +44,9 @@ def run_control_tick(controller, transport, state, params, read_sensors,
         try:
             apply_decision(transport, decision, controller)
         except Exception as exc:
-            if log:
+            if warn:
+                warn("Control: apply_decision failed: %s" % exc)
+            elif log:
                 log("Control: apply_decision failed: %s" % exc)
 
     state.set_heating_on(controller.heating_on)
@@ -52,7 +54,9 @@ def run_control_tick(controller, transport, state, params, read_sensors,
     try:
         transport.tick(now_ms)
     except Exception as exc:
-        if log:
+        if warn:
+            warn("Control: transport.tick failed: %s" % exc)
+        elif log:
             log("Control: transport.tick failed: %s" % exc)
 
     return decision

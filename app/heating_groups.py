@@ -67,15 +67,16 @@ class HeatingGroups:
     name = "rooms"
 
     def __init__(self, config, cache_path="/ccu3_rooms_cache.json",
-                 http_post=None, log=None):
+                 http_post=None, log=None, warn=None):
         self._config = config
         self._cache_path = cache_path
-        self._log = log
+        self._log = log            # INFO -> console only
+        self._warn = warn if warn is not None else log  # WARN/ERROR -> flash
         self._mode = (config.get("room_source") or "heating_groups")
         self._rpc = Ccu3Rpc(config.get("ccu3_url"),
                             config.get("ccu3_user"),
                             config.get("ccu3_pass"),
-                            http_post=http_post, log=log)
+                            http_post=http_post, log=log, warn=warn)
         self._rooms = self._load_cache()  # list of {room_name, addr(s), iface}
         self._last = None  # most recent aggregate (for the sync `rooms` command)
 
@@ -203,13 +204,13 @@ class HeatingGroups:
                 return
             except Exception as exc:
                 last_error = exc
-                if self._log:
-                    self._log("Rooms: discovery attempt failed: %s" % exc)
+                if self._warn:
+                    self._warn("Rooms: discovery attempt failed: %s" % exc)
                 if attempt < 2:
                     await asyncio.sleep(0.5 * (2 ** attempt))
         self._rooms = None
-        if self._log:
-            self._log("Rooms: discovery failed: %s" % last_error)
+        if self._warn:
+            self._warn("Rooms: discovery failed: %s" % last_error)
 
     async def _build_rooms(self):
         """Stream devices one at a time; hold only the small results.
@@ -317,5 +318,5 @@ class HeatingGroups:
                 pass
             os.rename(temporary, self._cache_path)
         except Exception:
-            if self._log:
-                self._log("Rooms: could not write cache")
+            if self._warn:
+                self._warn("Rooms: could not write cache")
