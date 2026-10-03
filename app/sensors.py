@@ -13,11 +13,15 @@ the concrete source from app config.
 
 
 class SensorSource(object):
-    """Protocol: ``read() -> (t_out, lux, demand_raw)`` (None = unavailable)."""
+    """Protocol: ``await read() -> (t_out, lux, demand_raw)`` (None = unavailable).
+
+    ``read`` is a coroutine so a source that does I/O (the CCU3) never blocks
+    the board's event loop; the null source returns immediately.
+    """
 
     name = "sensor"
 
-    def read(self):
+    async def read(self):
         raise NotImplementedError
 
 
@@ -26,7 +30,7 @@ class NullSensorSource(SensorSource):
 
     name = "null"
 
-    def read(self):
+    async def read(self):
         return (None, None, None)
 
 

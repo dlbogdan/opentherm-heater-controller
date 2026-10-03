@@ -288,28 +288,31 @@ ROOMS_USAGE = "usage: rooms   # one pass over all heating groups (one at a time)
 
 
 def make_rooms_handler(groups):
-    """Return a shell callback that reads every heating group's setpoint and
-    actual in a single memory-efficient pass (O(1) RAM, one group at a time).
+    """Return a shell callback that shows the most recent room aggregate.
 
-    The CCU3 value-key recipe is documented in AGENTS.md; the collector lives
-    in ``app/heating_groups.py``.
+    The (slow) CCU3 room pass runs in its own periodic task (``rooms_poll_s``)
+    and caches the result; this command just returns that cache, so it is
+    instant and never blocks the board. The collector lives in
+    ``app/heating_groups.py``.
     """
 
     def handle(args=""):
         if args.split():
             return ROOMS_USAGE
-        try:
-            return json.dumps(groups.read())
-        except Exception as exc:  # surface, don't drop the shell connection
-            return "rooms read failed: %s" % exc
+        data = groups.last()
+        if data is None:
+            return ("no room data yet (rooms poll runs every rooms_poll_s; "
+                    "see `log`)")
+        return json.dumps(data)
 
     return handle
 
 
 def register_rooms_commands(shell, groups):
-    """Register the heating-group reader on a framework TelnetService."""
+    """Register the room aggregate viewer on a framework TelnetService."""
     shell.add(
         "rooms",
         make_rooms_handler(groups),
-        "setpoints + actuals of all heating groups (one at a time)",
+        "latest room aggregate (setpoints/actuals + demand); updated by the "
+        "periodic rooms poll",
     )

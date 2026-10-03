@@ -4,6 +4,7 @@ A fake JSON-RPC endpoint stands in for the CCU3 so the whole protocol logic
 (login, session expiry + retry, discovery, caching, staleness) runs on a host.
 """
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -15,6 +16,11 @@ sys.path.insert(0, str(ROOT / "app"))
 
 from ccu3 import Ccu3SensorSource  # noqa: E402
 from sensors import NullSensorSource, make_sensor_source  # noqa: E402
+
+
+def run(coro):
+    """Drive a coroutine to completion (host tests only)."""
+    return asyncio.run(coro)
 
 
 class FakeCcu3:
@@ -33,7 +39,7 @@ class FakeCcu3:
         self.methods = []
         self.fail_next_value = False
 
-    def __call__(self, url, body):
+    async def __call__(self, url, body):
         request = json.loads(body.decode())
         method = request["method"]
         params = request["params"]
@@ -77,7 +83,7 @@ class FakeCcu3:
              "id": rpc_id}).encode()
 
 
-def fail_post(url, body):
+async def fail_post(url, body):
     raise OSError("connection refused")
 
 
@@ -111,17 +117,17 @@ class Ccu3SourceTests(unittest.TestCase):
     def test_discovery_picks_weather_station_and_reads_values(self):
         fake = FakeCcu3()
         source = self.make(fake)
-        self.assertEqual(source.read(), (8.5, 12000.0, None))
+        self.assertEqual(run(source.read()), (8.5, 12000.0, None))
         cache = json.loads(Path(self.cache).read_text())
         self.assertEqual(cache["interface"], "HmIPRf")
         self.assertEqual(cache["address"], "BBB")  # the HmIP-SWO, not the valve
 
     def test_cache_hit_skips_discovery(self):
         fake = FakeCcu3()
-        self.make(fake).read()  # populates the cache
+        run(self.make(fake).read())  # populates the cache
         fake2 = FakeCcu3()
         source = self.make(fake2)
-        self.assertEqual(source.read(), (8.5, 12000.0, None))
+        self.assertEqual(run(source.read()), (8.5, 12000.0, None))
         self.assertNotIn("Device.listAll", fake2.methods)
         self.assertNotIn("Device.get", fake2.methods)
 
@@ -129,13 +135,13 @@ class Ccu3SourceTests(unittest.TestCase):
         fake = FakeCcu3()
         fake.fail_next_value = True  # first getValue: session expired
         source = self.make(fake)
-        self.assertEqual(source.read(), (8.5, 12000.0, None))
+        self.assertEqual(run(source.read()), (8.5, 12000.0, None))
         self.assertEqual(fake.methods.count("Session.login"), 2,
                          "must login, expire, re-login")
 
     def test_poll_failure_with_no_value_reports_no_reading(self):
         source = self.make(fail_post)
-        self.assertEqual(source.read(), (None, None, None))
+        self.assertEqual(run(source.read()), (None, None, None))
 
     def test_recent_value_survives_poll_failure(self):
         import ccu3
@@ -144,7 +150,7 @@ class Ccu3SourceTests(unittest.TestCase):
             sleep=lambda _s: None)
         failing._endpoint = ("HmIPRf", "BBB")
         failing._values = (8.5, 12000.0, ccu3._now_ms() - 10_000)  # 10 s old
-        self.assertEqual(failing.read(), (8.5, 12000.0, None))
+        self.assertEqual(run(failing.read()), (8.5, 12000.0, None))
 
     def test_value_older_than_stale_limit_is_dropped(self):
         import ccu3
@@ -153,7 +159,7 @@ class Ccu3SourceTests(unittest.TestCase):
             sleep=lambda _s: None)
         failing._values = (8.5, 12000.0,
                            ccu3._now_ms() - 700_000)  # > 600 s limit
-        self.assertEqual(failing.read(), (None, None, None))
+        self.assertEqual(run(failing.read()), (None, None, None))
 
 
 class MakeSourceTests(unittest.TestCase):

@@ -66,12 +66,17 @@ DEFAULTS = {
     "ccu3_pass": "REDACTED-CCU3-PASS",
     "ccu3_weather_type": "HmIP-SWO",
     "ccu3_poll_s": 60,
-    # Heating groups (the main rooms) = the HmIP-HEATING VirtualDevices, NOT the
-    # individual eTRV valves. See AGENTS.md "CCU3 / Homematic data reference".
-    "heating_group_type": "HmIP-HEATING",
+    # Room source (arch §3.4): "heating_groups" (default) reads the HmIP-HEATING
+    # groups whose room has a WTH; "etrv" averages every HmIP-eTRV per room.
+    # Room names always come from the CCU3 Room API (never from device names).
+    "room_source": "heating_groups",
     # Heating-demand saturation: the setpoint-minus-actual delta (deg C) at
     # which demand reaches 100%. 3.0 matches the working ReGaHd delta script.
     "demand_delta_cap": 3.0,
+    # Rooms poll interval (seconds): how often the (slow) CCU3 room pass runs.
+    # Kept separate from control_tick_s so the fast control loop can use the
+    # cached room demand without doing a 40s CCU3 pass every tick.
+    "rooms_poll_s": 300,
     # Home Assistant (arch §12)
     "mqtt_enabled": False,
     "mqtt_broker": "192.168.1.10",
@@ -190,6 +195,8 @@ class Config:
              "min_change must be >= 0"),
             ("control_tick_s", v["control_tick_s"] >= 5,
              "control_tick_s must be >= 5"),
+            ("rooms_poll_s", v["rooms_poll_s"] >= 30,
+             "rooms_poll_s must be >= 30"),
             ("net_port", 1 <= v["net_port"] <= 65535,
              "net_port must be in 1..65535"),
         )

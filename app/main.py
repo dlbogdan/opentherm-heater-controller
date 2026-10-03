@@ -161,20 +161,56 @@ async def main():
     from control.controller import Controller
     from control_loop import run_control_tick
     from sensors import make_sensor_source
+    log = lambda m: logger.info(m, log_to_file=True)
     controller = Controller(initial_heating_on=state.heating_on)
-    sensor_source = make_sensor_source(
-        config, log=lambda m: logger.info(m, log_to_file=True))
+    sensor_source = make_sensor_source(config, log=log)
 
-    def control_tick():
+    # Room model (arch §3.4): the (slow) CCU3 setpoint/actual pass runs in its
+    # OWN periodic task and caches the aggregate (demand + per-room). The fast
+    # control loop reads the cached demand + the weather (t_out/lux), so it
+    # never does a 40s CCU3 pass. All CCU3 I/O is async (non-blocking).
+    rooms = None
+    if config.get("ccu3_url"):
+        from heating_groups import HeatingGroups
+        rooms = HeatingGroups(config, log=log)
+
+        async def rooms_tick():
+            try:
+                await rooms.read()
+            except Exception as exc:  # contain; the next poll retries
+                log("Rooms: poll failed: %s" % exc)
+
+        rooms_poll_s = int(config.get("rooms_poll_s"))
+        tasks.create_periodic_task(
+            rooms_tick, interval_ms=rooms_poll_s * 1000, task_id="rooms",
+            description="CCU3 room pass (setpoints/actuals -> demand)",
+            is_coroutine=True)
+        logger.info("App: rooms poll started (every %ds)." % rooms_poll_s,
+                    log_to_file=True)
+
+    async def control_tick():
+        # Fetch the (possibly I/O-bound) weather reading first -- the only
+        # async part of this tick; the pure tick below stays sync + testable.
+        t_out, lux, _ = await sensor_source.read()
+        # Demand (0..1) from the cached room aggregate, else None (disabled).
+        demand = None
+        if rooms is not None:
+            agg = rooms.last()
+            if agg and agg.get("demand_pct") is not None:
+                demand = agg["demand_pct"] / 100.0
+
+        def read_sensors():
+            return (t_out, lux, demand)
+
         run_control_tick(
-            controller, transport, state, config.all(), sensor_source.read,
-            time.ticks_ms(), log=lambda m: logger.info(m, log_to_file=True))
+            controller, transport, state, config.all(), read_sensors,
+            time.ticks_ms(), log=log)
 
     tick_s = int(config.get("control_tick_s"))
     tasks.create_periodic_task(
         control_tick, interval_ms=tick_s * 1000, task_id="control",
         description="control loop (sensors -> controller -> audited transport)",
-        is_coroutine=False)
+        is_coroutine=True)
     logger.info(
         "App: control loop started (tick %ds, first tick immediate; actuation "
         "held on candidate/degraded boot)." % tick_s, log_to_file=True)
@@ -205,12 +241,8 @@ async def main():
                                     register_transport_commands)
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
-        if config.get("ccu3_url"):
-            from heating_groups import HeatingGroups
-            register_rooms_commands(
-                shell,
-                HeatingGroups(
-                    config, log=lambda m: logger.info(m, log_to_file=True)))
+        if rooms is not None:
+            register_rooms_commands(shell, rooms)
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",
