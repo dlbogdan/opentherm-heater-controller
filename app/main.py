@@ -170,30 +170,46 @@ async def main():
     controller = Controller(initial_heating_on=state.heating_on)
     sensor_source = make_sensor_source(config, log=log, warn=warn)
 
-    # Room model (arch §3.4): the (slow) setpoint/actual pass runs in its OWN
-    # periodic task and caches the aggregate (demand + per-room). The fast
-    # control loop reads the cached demand + the weather (t_out/lux), so it
-    # never does a slow pass. The concrete source (CCU3 heating groups, or
-    # none) is chosen by the factory -- main.py stays backend-agnostic, exactly
-    # as with the weather source above. All I/O is async (non-blocking).
-    # The framework fires each periodic task's FIRST tick immediately at boot,
-    # which is before Wi-Fi has connected -- that used to fire a CCU3 read and
-    # fail with EHOSTUNREACH (logged as a warning). Gate the network I/O on the
-    # Wi-Fi being up so the first tick that runs is one that can succeed; the
-    # next interval retries once connected. (A gateway ping would be a stricter
-    # check, but is_up() already excludes the "not connected yet" window.)
     def _net_up():
         try:
             return bool(wifi.is_up())
         except Exception:
             return False
 
+    async def _net_ready(timeout_ms):
+        """Bounded async wait for Wi-Fi; True when up, False when it expires.
+
+        The framework fires each periodic tick's FIRST call immediately at
+        boot -- before Wi-Fi has connected. The tick therefore WAITS for the
+        connect (bounded) instead of skipping: no I/O fires while the network
+        is down (no EHOSTUNREACH noise), and the first successful pass lands
+        right after connect instead of at the next interval. The timeout
+        keeps a board without Wi-Fi running (the tick degrades, the next
+        interval retries). Polling is 1 s -- the 500 ms Wi-Fi keepalive task
+        drives the connect in parallel.
+        """
+        deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
+        while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+            if _net_up():
+                return True
+            await asyncio.sleep(1.0)
+        return _net_up()
+
+    # Room model (arch §3.4): the (slow) setpoint/actual pass runs in its OWN
+    # periodic task and caches the aggregate (demand + per-room). The fast
+    # control loop reads the cached demand + the weather (t_out/lux), so it
+    # never does a slow pass. The concrete source (CCU3 heating groups, or
+    # none) is chosen by the factory -- main.py stays backend-agnostic, exactly
+    # as with the weather source above. All I/O is async (non-blocking).
+    # The first tick fires before Wi-Fi is connected: it waits (bounded, 120 s)
+    # for the connect instead of skipping, so the first pass lands right after
+    # connect -- no failing I/O, no full-interval dead wait.
     from rooms import make_rooms_source
     rooms = make_rooms_source(config, log=log, warn=warn)
     if rooms.enabled:
         async def rooms_tick():
-            if not _net_up():
-                return  # Wi-Fi not up yet -- skip (no I/O, no warning)
+            if not await _net_ready(120 * 1000):
+                return  # no network within the window -- next interval retries
             try:
                 await rooms.read()
             except Exception as exc:  # contain; the next poll retries
@@ -208,9 +224,11 @@ async def main():
     async def control_tick():
         # Fetch the (possibly I/O-bound) weather reading first -- the only
         # async part of this tick; the pure tick below stays sync + testable.
-        # Gate it on the Wi-Fi being up so the immediate first tick (before
-        # connect) degrades to failsafe instead of firing a failing read.
-        if _net_up():
+        # The tick waits (bounded, 30 s) for Wi-Fi instead of skipping: no
+        # failing read before connect, and the first real reading lands right
+        # after connect; still down when the window expires -> failsafe input
+        # (t_out is None) exactly as before.
+        if await _net_ready(30 * 1000):
             t_out, lux, _ = await sensor_source.read()
         else:
             t_out, lux = None, None
