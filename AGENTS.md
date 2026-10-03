@@ -20,13 +20,13 @@ engine), `assemble.py` (device-tree builder).
 
 The project ships no tools of its own (there is no `tools/` directory): every
 command above is invoked through the submodule path, e.g.
-`./micropy-system/tools/deploy.py`. Project defaults are passed as flags/env
+`./micropy-system/tools/target/deploy.py`. Project defaults are passed as flags/env
 rather than pinned in shims: `--name otc` (device.py), `--boot-marker
 "entering main loop"` (provision.py), `--ip-file .otc-device-ip` (deploy.py),
 and `OTC_IP` / `DEVICE_IP` env. Boundary: the framework owns lifecycle, device
 machinery, and build/OTA plumbing (USB, provisioning, A/B, release); the
 project owns the heating domain (`app/`) and its defaults. Refresh the
-framework with `./micropy-system/tools/update_framework.py`, then commit the
+framework with `./micropy-system/tools/micropy-wiring/update_framework.py`, then commit the
 submodule pointer; never fork framework tools back into the project.
 
 ## Critical: USB tools stop the running application
@@ -34,12 +34,12 @@ submodule pointer; never fork framework tools back into the project.
 - `mpremote` enters raw REPL by sending Ctrl-C. This interrupts the currently
   running application and leaves the board in REPL instead of resuming it.
 - Any helper that uses `mpremote` has the same effect, including most
-  `micropy-system/tools/device.py exec`, file-read, and `selftest` operations.
+  `micropy-system/tools/target/device.py exec`, file-read, and `selftest` operations.
 - Therefore, an inactive WLAN or missing heartbeat observed immediately after a
   USB diagnostic does **not** prove that normal boot failed. The diagnostic may
   have stopped a healthy app.
 - After the last USB operation, always reset the board once to restore normal
-  autonomous execution. `micropy-system/tools/deploy.py --usb` intentionally
+  autonomous execution. `micropy-system/tools/target/deploy.py --usb` intentionally
   performs a final reset after its USB self-test for this reason.
 - After that final reset, do not touch USB again while validating runtime
   behavior. Use the network endpoints instead.
@@ -50,11 +50,11 @@ The device runs the framework's remote shell (telnet-style line commands)
 on the standard telnet port (23):
 
 ```sh
-python micropy-system/tools/telnet.py 10.9.30.76 status
-python micropy-system/tools/telnet.py 10.9.30.76 log 40
-python micropy-system/tools/telnet.py 10.9.30.76 selftest
-python micropy-system/tools/telnet.py 10.9.30.76      # interactive (try 'repl')
-python micropy-system/tools/telnet.py 10.9.30.76 reboot
+python micropy-system/tools/target/telnet.py 10.9.30.76 status
+python micropy-system/tools/target/telnet.py 10.9.30.76 log 40
+python micropy-system/tools/target/telnet.py 10.9.30.76 selftest
+python micropy-system/tools/target/telnet.py 10.9.30.76      # interactive (try 'repl')
+python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 # or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
 ```
 
@@ -64,8 +64,8 @@ for several seconds. Retry before concluding that WiFi failed.
 ## Known-good deployment workflow
 
 ```sh
-./micropy-system/tools/deploy.py            # default: network-native, no USB
-./micropy-system/tools/deploy.py --usb      # fallback: board on USB, mpremote path
+./micropy-system/tools/target/deploy.py            # default: network-native, no USB
+./micropy-system/tools/target/deploy.py --usb      # fallback: board on USB, mpremote path
 ```
 
 Network mode bumps the app version, builds, serves the update, reboots the
@@ -93,7 +93,7 @@ provision time, and should match it for manual deploys):
 
 - `mode: "local"` → `FIRMWARE.DIRECT_BASE_URL` is set (the updater fetches
   `<base_url>/metadata.json` then the package;
-  `micropy-system/tools/serve_update.py` serves `build/` on `:8000` and is
+  `micropy-system/tools/target/serve_update.py` serves `build/` on `:8000` and is
   what `deploy.py` relies on).
 - `mode: "github"` → `FIRMWARE.GITHUB_REPO` (+ optional `GITHUB_TOKEN`) is
   set; `DIRECT_BASE_URL` is cleared.
@@ -107,7 +107,7 @@ leaving `ota-state.json` `active: "b"`. So a healthy board may well report
 
 ## Blank / corrupted Pico provisioning
 
-`micropy-system/tools/provision.py` flashes a blank or corrupted board entirely over USB
+`micropy-system/tools/target/provision.py` flashes a blank or corrupted board entirely over USB
 (no network needed). It re-flashes the pinned MicroPython 1.29.0 UF2, formats
 the data LFS for a true reset, uploads the assembled device tree, and uploads a resolved
 `system-config.json` — the local (gitignored) file if present, else a default
@@ -115,9 +115,9 @@ generated from `system-config.example.json`. It verifies the app reaches its
 main loop over USB, then performs the required final reset:
 
 ```sh
-micropy-system/tools/provision.py                                  # Pico 2 W (RP2350)
-micropy-system/tools/provision.py --board pico-w                   # Pico W (RP2040)
-micropy-system/tools/provision.py --ssid "MyNet" --pass "secret"   # Wi-Fi creds as args;
+micropy-system/tools/target/provision.py                                  # Pico 2 W (RP2350)
+micropy-system/tools/target/provision.py --board pico-w                   # Pico W (RP2040)
+micropy-system/tools/target/provision.py --ssid "MyNet" --pass "secret"   # Wi-Fi creds as args;
                                                                     # works with no local config
 ```
 
@@ -181,7 +181,7 @@ away):
 ## Firmware entry and A/B layout
 
 - Source entry point: `app/main.py`, exposing `async def main()`.
-- Build mapping: `micropy-system/tools/assemble.py` packages it as `app_entry.py` inside the
+- Build mapping: `micropy-system/tools/build/assemble.py` packages it as `app_entry.py` inside the
   candidate slot. Other `app/*` modules are siblings under the slot.
 - Device slots are `/apps/a` and `/apps/b`; `/ota-state.json` identifies active,
   pending, rejected version, and generation.

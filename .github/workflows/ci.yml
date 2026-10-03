@@ -31,4 +31,4 @@ jobs:
         working-directory: micropy-system
         run: python -m unittest discover -s tests -q
       - name: Build firmware
-        run: ./micropy-system/tools/build_firmware.py
+        run: ./micropy-system/tools/build/build_firmware.py
