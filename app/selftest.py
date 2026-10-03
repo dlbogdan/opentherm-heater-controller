@@ -7,8 +7,9 @@ Framework-free, so it runs identically on a host (CPython) and on-device
     selftest.run()
 
 It exercises the heat curve, solar accumulator, hysteresis, rate limiter, frost
-clamp, and a full end-to-end pipeline, and returns True only if every check
-passes. No hardware is needed.
+clamp, a full end-to-end pipeline, and the control-loop wiring (sensors ->
+controller -> audited transport, including hold/rollback), and returns True
+only if every check passes. No hardware is needed.
 """
 
 from control.heat_curve import base_flow
@@ -138,6 +139,78 @@ def run():
     d5 = ctl.tick(240000, p, None, lux=0.0)     # no outdoor temp -> failsafe
     c.ok("pipe: no t_out -> failsafe heat at 45C",
          d5.action == "heat" and d5.target == FAILSAFE_FLOW)
+
+    # -- Control loop wiring (sensors -> controller -> audited transport) ----
+    from control_loop import run_control_tick
+    from transport.audit import (KIND_API_CALL, RESULT_EXCEPTION,
+                                 RESULT_OK, RESULT_REJECTED)
+    from transport.dummy import DummyTransportDrv
+    from transport.log import LogTransport
+
+    class _FakeState(object):
+        def __init__(self):
+            self.heating_on = False
+            self.candidate_boot = False
+            self.post_failed = False
+            self.saved = []
+
+        def set_heating_on(self, value):
+            self.saved.append(bool(value))
+
+    def _read_none():
+        return (None, None, None)
+
+    st = _FakeState()
+    ctl = Controller(initial_heating_on=False)
+    drv = DummyTransportDrv()
+    logt = LogTransport(drv)
+    d = run_control_tick(ctl, logt, st, p, _read_none, 0)
+    c.ok("loop: null sensors -> failsafe heat decision",
+         d.action == "heat" and d.target == FAILSAFE_FLOW)
+    c.ok("loop: heat applied to driver (CH on + CS set)",
+         drv._heating is True and drv._setpoint is not None)
+    c.ok("loop: heating latch persisted",
+         st.saved == [True] and ctl.heating_on is True)
+    c.ok("loop: audit ring records both API calls",
+         sum(1 for r in logt.ring.records()
+             if r[2] == KIND_API_CALL and r[3] == RESULT_OK) == 2)
+
+    st_held = _FakeState()
+    st_held.candidate_boot = True
+    ctl_held = Controller(initial_heating_on=False)
+    drv_held = DummyTransportDrv()
+    logt_held = LogTransport(drv_held)
+    d_held = run_control_tick(ctl_held, logt_held, st_held, p, _read_none, 0)
+    c.ok("loop: candidate boot -> held (no actuation, no persistence)",
+         d_held is None and drv_held._heating is False
+         and st_held.saved == [])
+    c.ok("loop: candidate boot -> audit ring stays empty",
+         logt_held.ring.count == 0)
+
+    st_rej = _FakeState()
+    ctl_rej = Controller(initial_heating_on=False)
+    drv_rej = DummyTransportDrv()
+    drv_rej.set_fail_next()  # next write: command sent, no ack
+    logt_rej = LogTransport(drv_rej)
+    run_control_tick(ctl_rej, logt_rej, st_rej, p, _read_none, 0)
+    c.ok("loop: rejected write rolls the latch back",
+         ctl_rej.heating_on is False and st_rej.saved == [False])
+    c.ok("loop: rejection visible in the audit ring",
+         any(r[3] in (RESULT_REJECTED, RESULT_EXCEPTION)
+             for r in logt_rej.ring.records()))
+
+    def _read_cold():
+        return (10.0, 0.0, None)
+
+    st_skip = _FakeState()
+    ctl_skip = Controller(initial_heating_on=False)
+    drv_skip = DummyTransportDrv()
+    logt_skip = LogTransport(drv_skip)
+    d_a = run_control_tick(ctl_skip, logt_skip, st_skip, p, _read_cold, 0)
+    c.ok("loop: cold -> heat applied to driver",
+         d_a.action == "heat" and drv_skip._heating is True)
+    d_b = run_control_tick(ctl_skip, logt_skip, st_skip, p, _read_cold, 60000)
+    c.ok("loop: unchanged -> skip (no re-write)", d_b.action == "skip")
 
     print("\n%d checks, %d failed" % (c.total, c.failed))
     return c.failed == 0

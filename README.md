@@ -71,6 +71,22 @@ sequence, a repeated-frame burst (verifying coalescing), and an injected
 no-ack failure (verifying error records). `save`/`verify` are opt-in only
 (atomic top-level-file writes, never automatic) and exist to preserve and
 check a snapshot across a reboot or network loss; day-to-day inspection uses
-`transport commands`. The decorator is wired and live now; it will receive
-real control decisions and gateway traffic as soon as the control scheduler
-and OTGW driver are connected.
+`transport commands`.
+
+## Control loop
+
+A periodic task (``app/control_loop.py``) runs the pure control core against
+the audited transport: ``sensors -> Controller.tick -> apply_decision ->
+persist heating latch -> driver maintenance``. The interval is configurable:
+``control_tick_s`` in ``config.json`` (default 60 s, minimum 5 s, applied at
+boot; the first tick fires immediately after boot). While the framework marks
+a boot as candidate or degraded, all physical actuation is held (A/B safety).
+
+Until the sensor source (Homematic CCU3 / weather station) and the OTGW
+driver land, the loop runs its **null sensor source** -- which is the
+defined failsafe input (no fresh ``t_out`` -> fixed safe flow) -- against
+the dummy driver. That means a healthy board *does* show control activity:
+``transport status`` reports heating on at 45 °C, and ``transport commands``
+shows the ``set_heating`` / ``set_flow_target`` API calls the loop made.
+Rejecting or dropping a write rolls the controller's optimistic state back
+so the next tick retries, and the rejection is visible in the ring.

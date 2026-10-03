@@ -46,6 +46,8 @@ DEFAULTS = {
     "demand_max_p_offset": 10,
     # Rate limiting
     "min_change": 2,
+    # Control loop (periodic tick interval in seconds; applied at boot)
+    "control_tick_s": 60,
     # Transport
     "transport": "otgw",          # "otgw" | "direct_ot"
     "off_sentinel": 20.0,
@@ -165,6 +167,8 @@ class Config:
              "demand_max_p_offset must be >= 0"),
             ("min_change", v["min_change"] >= 0,
              "min_change must be >= 0"),
+            ("control_tick_s", v["control_tick_s"] >= 5,
+             "control_tick_s must be >= 5"),
             ("net_port", 1 <= v["net_port"] <= 65535,
              "net_port must be in 1..65535"),
         )

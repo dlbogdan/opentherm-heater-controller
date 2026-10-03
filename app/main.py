@@ -9,9 +9,15 @@ establishes the three things every later step builds on:
   confirm; a passing candidate is confirmed inside the 12 s watchdog window, a
   failing one is rolled back and quarantined. This app supplies no domain
   checks of its own -- it just *reads* the boot context
-  (``is_candidate_boot`` / ``is_degraded``) to hold actuation. The control-core
-  self-test (``selftest.py``) stays as the on-demand reference (shell
-  ``selftest``) until the transport is live.
+  (``is_candidate_boot`` / ``is_degraded``) to hold actuation (the control
+  loop issues no physical writes on a candidate/degraded boot). The
+  self-test (``selftest.py``, shell ``selftest``) stays as the on-demand
+  reference and also covers the control-loop wiring.
+* **The control loop** — a periodic task (``control_loop.py``) running
+  ``sensors -> Controller -> audited transport`` on a configurable interval
+  (``control_tick_s``). Until the sensor source and the real OTGW driver land,
+  it runs null readings (defined failsafe heat) against the dummy driver,
+  which is fully observable through the ``transport`` shell commands.
 * **Wi-Fi** (optional, non-fatal) — kicked off non-blocking and driven to
   completion by a 500 ms keepalive task; the control core runs fine with it off.
 * **The scheduler** — a ``TaskManager`` whose periodic tasks are the single place
@@ -140,13 +146,38 @@ async def main():
     tasks = TaskManager()
 
     # Shared audited transport: LogTransport (bounded in-memory ring) wraps
-    # the driver; the shell observes this exact instance and the future
-    # control task will apply its decisions through the same object.
-    # DummyTransportDrv simulates OTGW CH/CS + ack traffic until
-    # OTGWTransportDrv lands.
+    # the driver; the shell observes this exact instance and the control loop
+    # applies its decisions through the same object. DummyTransportDrv
+    # simulates OTGW CH/CS + ack traffic until OTGWTransportDrv lands.
     from transport.log import LogTransport
     from transport.dummy import DummyTransportDrv
     transport = LogTransport(DummyTransportDrv())
+
+    # 2b. Control loop: sensors -> controller -> audited transport. The
+    #     interval is configurable (control_tick_s, seconds; applied at boot)
+    #     and the first tick fires immediately after the task starts. All
+    #     actuation is held while the framework marks this boot as candidate
+    #     or degraded (state.candidate_boot / state.post_failed).
+    from control.controller import Controller
+    from control_loop import run_control_tick
+    from sensors import make_sensor_source
+    controller = Controller(initial_heating_on=state.heating_on)
+    sensor_source = make_sensor_source(
+        config, log=lambda m: logger.info(m, log_to_file=True))
+
+    def control_tick():
+        run_control_tick(
+            controller, transport, state, config.all(), sensor_source.read,
+            time.ticks_ms(), log=lambda m: logger.info(m, log_to_file=True))
+
+    tick_s = int(config.get("control_tick_s"))
+    tasks.create_periodic_task(
+        control_tick, interval_ms=tick_s * 1000, task_id="control",
+        description="control loop (sensors -> controller -> audited transport)",
+        is_coroutine=False)
+    logger.info(
+        "App: control loop started (tick %ds, first tick immediate; actuation "
+        "held on candidate/degraded boot)." % tick_s, log_to_file=True)
 
     if has_ssid:
         _apply_static_ip()  # no-op unless a static IP is configured

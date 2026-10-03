@@ -74,6 +74,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.set_value("transport", "unknown")
         self.set_value("solar_halflife", 0)
         self.set_value("net_port", 70000)
+        self.set_value("control_tick_s", 1)
 
         problems = self.config.validate()
 
@@ -82,9 +83,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("transport has invalid value", problems)
         self.assertIn("solar_halflife must be > 0", problems)
         self.assertIn("net_port must be in 1..65535", problems)
+        self.assertIn("control_tick_s must be >= 5", problems)
         values = self.config.all()
         for key in ("flow_min", "mqtt_enabled", "transport",
-                    "solar_halflife", "net_port"):
+                    "solar_halflife", "net_port", "control_tick_s"):
             self.assertEqual(values[key], self.module.DEFAULTS[key])
 
     def test_cross_key_validation_repeats_until_result_is_consistent(self):
