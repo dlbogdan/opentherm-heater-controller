@@ -225,6 +225,35 @@ Verified on the installed MicroPython 1.29.0 build:
   loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
   the total free looks sufficient (fragmentation). `gc.collect()` before a
   large read/parse, and **stream** large payloads instead of accumulating them.
+- **A same-named directory shadows a same-named module — even when empty.**
+  If `sensors/` and `sensors.py` both exist in one directory on the device,
+  `import sensors` resolves to the *directory* (a package), and
+  `from sensors import make_sensor_source` dies with `ImportError: no module
+  named 'sensors.make_sensor_source'`. CPython does the opposite (a plain
+  module beats a namespace dir without `__init__.py`), so the whole host
+  suite passes and only the device crashes. Episode 2026-10-03: stray empty
+  `app/sensors/` + `app/ui/` dirs (editor-created; git cannot track empty
+  dirs) were copied into the slot by `assemble.py` (it copies the working
+  tree, not git) and the app died in `main()` on every boot — the
+  diagnostic signature was: boot → OTA check (Wi-Fi up, board answers
+  **one ping**) → crash/reset loop, shell never comes up, REPL alive, no
+  ERROR in `/log.txt` (the ImportError is raised in the app, console-only).
+  Fix was deleting the dirs (`rmdir app/sensors app/ui`) and re-provisioning.
+  Never ship a dir and a module with the same name; after editor tooling
+  runs, check `app/` for stray empty dirs before assembling.
+- **When the shell is down, the REPL is usually alive — use it as the
+  definitive on-device repro.** A board that answers one ping but never
+  serves the shell (boot → OTA check → crash/reset loop) still answers
+  Ctrl-C on the CP2102N port with `>>>` (no `KeyboardInterrupt` line = the
+  script already ended, the app was not running). Run the launcher steps
+  manually over `mpremote exec` (fresh interpreter state per script — import
+  everything yourself): `sys.path.insert(0, 'apps/a')` → `import app_entry`
+  → `slot_manager.prepare_slot_boot()` → `post.run_post(app_entry)` →
+  `uasyncio.run(app_entry.main())`. If `main()` returns within seconds it
+  RAISED (or returned — both kill the boot) and the message names the
+  culprit (e.g. `ImportError: no module named 'sensors.make_sensor_source'`).
+  Note `mpremote cat`/`fs` also work in this state, so `/log.txt` can be
+  read even when the shell never comes up.
 
 ## Logging policy (flash-wear constrained — a microcontroller, not a Linux PC)
 
