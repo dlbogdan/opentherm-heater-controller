@@ -59,11 +59,15 @@ DEFAULTS = {
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"
     "lux_source": "auto",
     # Homematic CCU3 (arch §3.4). The ReGaHd JSON-RPC endpoint is
-    # /api/homematic.cgi (the bare /api/ path 403s). Values are the local
-    # production CCU3 + HmIP-SWO weather station (repo is local-only).
-    "ccu3_url": "http://10.9.30.10/api/homematic.cgi",
-    "ccu3_user": "homeassistant",
-    "ccu3_pass": "REDACTED-CCU3-PASS",
+    # /api/homematic.cgi (the bare /api/ path 403s). Credentials are
+    # per-device and must NOT live in this file: the defaults are empty
+    # (empty ccu3_url = no CCU3 source -> demand disabled, weather degrades
+    # to failsafe). Set them on the board (shell `config set ccu3_url /
+    # ccu3_user / ccu3_pass`) or via a local, uncommitted config at
+    # provision time.
+    "ccu3_url": "",
+    "ccu3_user": "",
+    "ccu3_pass": "",
     "ccu3_weather_type": "HmIP-SWO",
     "ccu3_poll_s": 60,
     # Room source (arch §3.4): "heating_groups" (default) reads the HmIP-HEATING
