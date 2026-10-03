@@ -239,7 +239,7 @@ solar accumulator, change `last_sent_flow`, or alter controller state.
 ### 3.4 Remote sensor source (Homematic CCU3)
 
 The Homematic IP CCU3 on the LAN exposes a JSON-RPC-over-HTTP API
-(`POST /api/`) through which an HmIP-SWO weather station reports
+(`POST /api/homematic.cgi`) through which an HmIP-SWO weather station reports
 `ACTUAL_TEMPERATURE`, `WIND_SPEED`, and `ILLUMINATION` — a single source
 for **both** `t_out` and `lux`, eliminating the need for the wired
 DS18B20/BH1750. This integration is proven: it ran reliably on the Pico W
@@ -254,11 +254,15 @@ need (valve polling, room lookups, statistics).
   deliberately skipped: the MicroPython TLS stack is heavy and the CCU3
   sits on a trusted LAN. (If the CCU3 ever moves off the LAN, revisit —
   see §14 open items.)
-- **Auth:** `Session.login` with `{username, password}` returns a session
+- **Endpoint note:** the ReGaHd JSON-RPC endpoint is `/api/homematic.cgi` (the bare `/api/` path is 403-rejected); verified against the production CCU3.
+
+**Auth:** `Session.login` with `{username, password}` returns a session
   id; every subsequent call carries `_session_id_` in `params`. On a
   session-expiry error (message contains "session" / "not logged in" /
   "access denied", or code −1), re-login once and retry the failed call.
-- **Discovery (one-time):** `Device.listAll` → `Device.get {id}` per
+- **Discovery (one-time; some CCU system/virtual devices make the CCU's
+  own get handler raise a Tcl error -- discovery skips per-device failures):**
+  `Device.listAll` → `Device.get {id}` per
   candidate → first device whose `type` contains the configured substring
   (default `HmIP-SWO`) → store `{interface, address}`.
 - **Poll (every 60 s):** `Interface.getValue` with
@@ -429,7 +433,7 @@ DEFAULTS = {
 
 > **Provisioning split:** the ~20 control parameters stay button-UI editable.
 > The network block (CCU3 URL/credentials, MQTT broker/credentials) is
-> provisioned **once** — by editing `config.json` over USB/serial, or a
+> provisioned **once** — by editing `app-config.json` over USB/serial, or a
 > minimal setup flow — not through the 5-button UI (typing URLs and
 > passwords with up/down buttons is not a viable UX). Credentials live in
 > flash like everything else; treat the device like any other LAN appliance.
@@ -688,7 +692,7 @@ Two small files, written **only** when their contents change. No periodic
 timer. The control algorithm is a pure function of current sensor readings —
 nothing else needs to survive a power cycle.
 
-### 10.1 `config.json` — user settings
+### 10.1 `app-config.json` — user settings (the app's own config file, distinct from the framework's `system-config.json`)
 
 ```json
 {
@@ -706,7 +710,7 @@ nothing else needs to survive a power cycle.
 
 - **When:** on every config edit via the button UI (one write per parameter
   change). In practice: a handful of writes over the device's lifetime.
-- **Boot:** load `config.json`; if missing or corrupt, fall back to `DEFAULTS`.
+- **Boot:** load `app-config.json`; if missing or corrupt, fall back to `DEFAULTS`.
 
 ### 10.2 `state.json` — heating mode
 
@@ -732,7 +736,7 @@ nothing else needs to survive a power cycle.
     large delta and the first post-boot write goes through (correct).
   - Timestamps — start fresh; the transport re-establishes within one tick.
 - **Boot recovery:**
-  1. Load `config.json` (fall back to `DEFAULTS` if missing/corrupt).
+  1. Load `app-config.json` (fall back to `DEFAULTS` if missing/corrupt).
   2. Load `state.json` → restore `heating_on`. If missing, default `false`.
   3. `solar_accum = 0`, `last_sent_flow = off_sentinel`, timestamps = now.
   4. First control tick (≤60 s) recomputes everything from live sensors.

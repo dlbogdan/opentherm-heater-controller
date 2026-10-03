@@ -63,6 +63,9 @@ on the standard telnet port (23):
 python micropy-system/tools/target/telnet.py 10.9.30.76 status
 python micropy-system/tools/target/telnet.py 10.9.30.76 log 40
 python micropy-system/tools/target/telnet.py 10.9.30.76 selftest
+python micropy-system/tools/target/telnet.py 10.9.30.76 transport status   # audit ring
+python micropy-system/tools/target/telnet.py 10.9.30.76 config            # app config (JSON)
+python micropy-system/tools/target/telnet.py 10.9.30.76 config set t_on 15
 python micropy-system/tools/target/telnet.py 10.9.30.76      # interactive (try 'repl')
 python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 # or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
@@ -217,13 +220,13 @@ Verified on the installed MicroPython 1.29.0 build:
 ## Framework ownership rules
 
 - Use `lib.coresys.manager_wifi.WiFiManager`; credentials come from
-  `/system-config.json` (`WIFI.SSID` and `WIFI.PASS`). App `/config.json`
+  `/system-config.json` (`WIFI.SSID` and `WIFI.PASS`). App `/app-config.json`
   contains control/network-service settings, not WiFi credentials.
 - Use `lib.coresys.manager_tasks.TaskManager` for all application tasks.
 - Use `create_periodic_task` for recurring work. It contains per-tick failures.
 - `TaskManager.create_task` re-raises task exceptions after logging; an
   unhandled one-shot task failure can escape the event loop.
-- App static-IP configuration is a no-op when `config.json` has empty `net_ip`;
+- App static-IP configuration is a no-op when `app-config.json` has empty `net_ip`;
   empty means DHCP.
 
 ## Verified milestones

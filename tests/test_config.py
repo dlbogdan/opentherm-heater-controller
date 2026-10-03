@@ -104,6 +104,28 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertLess(values["t_design"], values["t_on"])
         self.assertLess(values["t_on"], values["t_off"])
 
+    def test_ota_update_seeds_new_keys_and_preserves_user_values(self):
+        # OTA ships new app code (new DEFAULTS) into the slot; the on-device
+        # config file is NOT re-uploaded. At the post-OTA boot, validate()
+        # -> all() -> get() must (a) seed any key the old file lacks with the
+        # new shipped default and persist it, and (b) leave a user-customized
+        # value untouched (never clobbered by an update).
+        module = self.module
+        # The board's existing file: the user set t_on to 15 (not the default
+        # 13), and it predates the firmware that added control_tick_s.
+        # (The fake ConfigManager keys its store by (section, key).)
+        self.config._cm.values = {(module.SECTION, "t_on"): 15}
+
+        problems = self.config.validate()  # what main.py does at boot
+
+        self.assertEqual(problems, [], "a valid user value must not be reset")
+        values = self.config.all()
+        # (b) user's customized value is preserved across the update.
+        self.assertEqual(values["t_on"], 15)
+        # (a) the new key is seeded from the shipped default and persisted.
+        self.assertEqual(values["control_tick_s"], module.DEFAULTS["control_tick_s"])
+        self.assertIn((module.SECTION, "control_tick_s"), self.config._cm.values)
+
 
 if __name__ == "__main__":
     unittest.main()

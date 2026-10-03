@@ -1,8 +1,9 @@
 """App control configuration (Step 1).
 
 Owns the ~30 weather-compensation control parameters (arch §6). They live in the
-app's own ``config.json`` -- separate from the framework's ``system-config.json``
-(device / Wi-Fi / OTA) -- and are managed through the framework ``ConfigManager``
+app's own ``/app-config.json`` -- separate from the framework's
+``/system-config.json`` (device / Wi-Fi / OTA) -- and are managed through the
+framework ``ConfigManager``
 for self-seeding defaults, persist-on-change, and subscribe/notify (the latter is
 what lets the button config UI live-update later).
 
@@ -15,7 +16,10 @@ be unit-tested on a host.)
 import lib.coresys.logger as logger
 from lib.coresys.manager_config import ConfigManager
 
-CONFIG_FILE = "/config.json"
+# App-owned runtime config (the file the app/user edits most). Named to pair
+# with the framework's /system-config.json; both live outside the A/B slots
+# so they survive OTA updates.
+CONFIG_FILE = "/app-config.json"
 SECTION = "CONTROL"
 
 # Defaults -- arch §6 / logic-spec §2. Single source of truth for the pipeline.
@@ -54,10 +58,12 @@ DEFAULTS = {
     # Sensor sources (arch §3.5)
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"
     "lux_source": "auto",
-    # Homematic CCU3 (arch §3.4)
-    "ccu3_url": "http://192.168.1.50/api/",
-    "ccu3_user": "",
-    "ccu3_pass": "",
+    # Homematic CCU3 (arch §3.4). The ReGaHd JSON-RPC endpoint is
+    # /api/homematic.cgi (the bare /api/ path 403s). Values are the local
+    # production CCU3 + HmIP-SWO weather station (repo is local-only).
+    "ccu3_url": "http://10.9.30.10/api/homematic.cgi",
+    "ccu3_user": "homeassistant",
+    "ccu3_pass": "REDACTED-CCU3-PASS",
     "ccu3_weather_type": "HmIP-SWO",
     "ccu3_poll_s": 60,
     # Home Assistant (arch §12)
@@ -106,6 +112,15 @@ class Config:
     def all(self):
         """Snapshot of every control parameter (for display / tests / UI)."""
         return dict((k, self.get(k)) for k in DEFAULTS)
+
+    @property
+    def defaults(self):
+        """The shipped ``DEFAULTS`` dict (what a fresh firmware would seed).
+
+        Exposed so the shell ``config`` group and host tests can discover valid
+        keys and their expected types without importing the framework.
+        """
+        return DEFAULTS
 
     def validate(self):
         """Validate types, domains, and §6 cross-key constraints.

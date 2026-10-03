@@ -200,8 +200,10 @@ async def main():
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
-        from shell_commands import register_transport_commands
+        from shell_commands import (register_config_commands,
+                                    register_transport_commands)
         register_transport_commands(shell, transport)
+        register_config_commands(shell, config)
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",
@@ -209,7 +211,7 @@ async def main():
         logger.info("App: remote shell service task started.")
 
     # 3. App domain config + state (Step 1): log the validated boot snapshot.
-    #    Config is loaded from /config.json and repaired by the pre-flight
+    #    Config is loaded from /app-config.json and repaired by the pre-flight
     #    validation above before any future control task can consume it.
     logger.info(
         "App: t_off=%s t_on=%s flow[%s..%s] min_on=%s design=%s/%s transport=%s"

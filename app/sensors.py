@@ -33,13 +33,20 @@ class NullSensorSource(SensorSource):
 def make_sensor_source(config, log=None):
     """Select the sensor source from app config (arch §3.5).
 
-    Current wiring (control loop step): only the null source exists, so every
-    selection reports "no live readings yet" and the controller runs its
-    defined failsafe. When the CCU3 source lands, ``ccu3``/``auto`` select it
-    here -- the control loop itself does not change.
+    ``ccu3``/``auto`` use the CCU3 weather station when ``ccu3_url`` is set
+    (``auto`` falls back to the null source without one); ``local`` is the
+    future wired-probe source and the null source is the explicit safe
+    default. Whatever is selected, ``t_out=None`` is the defined failsafe
+    input, so a dead source degrades the controller safely.
     """
     requested = config.get("t_out_source")
+    if requested in ("ccu3", "auto") and config.get("ccu3_url"):
+        from ccu3 import Ccu3SensorSource
+        if log:
+            log("Sensors: t_out_source=%s -> CCU3 at %s"
+                % (requested, config.get("ccu3_url")))
+        return Ccu3SensorSource(config, log=log)
     if log:
-        log("Sensors: t_out_source=%s -> using %s (no live readings yet)"
+        log("Sensors: t_out_source=%s -> using %s (no live readings)"
             % (requested, NullSensorSource.name))
     return NullSensorSource()

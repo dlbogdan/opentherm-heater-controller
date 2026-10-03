@@ -183,3 +183,100 @@ def register_transport_commands(shell, transport):
         "status|commands [N] [text|json]|demo|verify [json|raw] [PATH]"
         "|clear|save [json|raw]",
     )
+
+
+# --------------------------------------------------------------------------- config
+
+CONFIG_USAGE = ("usage: config [get [KEY]|set KEY VALUE|reset KEY|list|defaults]")
+
+
+def _coerce(default, raw):
+    """Coerce a shell string to the type of ``default`` -> (ok, value_or_msg).
+
+    Booleans are checked before ints (``bool`` subclasses ``int``).
+    """
+    text = raw.strip()
+    if isinstance(default, bool):
+        lowered = text.lower()
+        if lowered in ("true", "1", "yes", "on"):
+            return True, True
+        if lowered in ("false", "0", "no", "off"):
+            return True, False
+        return False, "expected true/false"
+    if isinstance(default, int):
+        try:
+            return True, int(text)
+        except ValueError:
+            return False, "expected an integer"
+    if isinstance(default, float):
+        try:
+            return True, float(text)
+        except ValueError:
+            return False, "expected a number"
+    return True, text  # strings pass through
+
+
+def make_config_handler(config):
+    """Return a shell callback that reads/edits the app config over the air.
+
+    ``set`` coerces to the key's type, persists via ``config.set`` (which also
+    notifies live subscribers), then runs ``config.validate`` to self-heal:
+    an out-of-range value is reported REJECTED and reset, a valid one OK.
+    """
+    defaults = config.defaults
+
+    def handle(args=""):
+        parts = args.split()
+        command = parts[0] if parts else "list"
+
+        if command in ("list", "get") and len(parts) <= 1:
+            # Bare ``config`` / ``config list`` / ``config get`` -> all values.
+            return json.dumps(config.all())
+
+        if command == "get" and len(parts) == 2:
+            key = parts[1]
+            if key not in defaults:
+                return "unknown config key: %s" % key
+            return json.dumps({key: config.get(key)})
+
+        if command == "set" and len(parts) == 3:
+            key, raw = parts[1], parts[2]
+            if key not in defaults:
+                return "unknown config key: %s" % key
+            ok, value = _coerce(defaults[key], raw)
+            if not ok:
+                return "set failed for %s: %s" % (key, value)
+            config.set(key, value)
+            problems = config.validate()
+            current = config.get(key)
+            if current == value:
+                note = "" if not problems else " (also repaired: %s)" % "; ".join(problems)
+                return "OK: %s = %s%s" % (key, current, note)
+            return ("REJECTED: %s = %s is invalid; reset to %s. %s"
+                    % (key, value, current, "; ".join(problems)))
+
+        if command == "reset" and len(parts) == 2:
+            key = parts[1]
+            if key not in defaults:
+                return "unknown config key: %s" % key
+            config.set(key, defaults[key])
+            problems = config.validate()
+            return "OK: %s reset to %s%s" % (
+                key, config.get(key),
+                "" if not problems else " (repaired: %s)" % "; ".join(problems))
+
+        if command == "defaults" and len(parts) == 1:
+            return json.dumps(defaults)
+
+        return CONFIG_USAGE
+
+    return handle
+
+
+def register_config_commands(shell, config):
+    """Register the app-config editor on a framework TelnetService."""
+    shell.add(
+        "config",
+        make_config_handler(config),
+        "get [KEY]|set KEY VALUE|reset KEY|list|defaults",
+    )

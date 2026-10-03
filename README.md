@@ -78,15 +78,50 @@ check a snapshot across a reboot or network loss; day-to-day inspection uses
 A periodic task (``app/control_loop.py``) runs the pure control core against
 the audited transport: ``sensors -> Controller.tick -> apply_decision ->
 persist heating latch -> driver maintenance``. The interval is configurable:
-``control_tick_s`` in ``config.json`` (default 60 s, minimum 5 s, applied at
-boot; the first tick fires immediately after boot). While the framework marks
+``control_tick_s`` in ``/app-config.json`` (default 60 s, minimum 5 s,
+applied at boot; the first tick fires immediately after boot). While the framework marks
 a boot as candidate or degraded, all physical actuation is held (A/B safety).
 
-Until the sensor source (Homematic CCU3 / weather station) and the OTGW
-driver land, the loop runs its **null sensor source** -- which is the
-defined failsafe input (no fresh ``t_out`` -> fixed safe flow) -- against
-the dummy driver. That means a healthy board *does* show control activity:
-``transport status`` reports heating on at 45 °C, and ``transport commands``
-shows the ``set_heating`` / ``set_flow_target`` API calls the loop made.
-Rejecting or dropping a write rolls the controller's optimistic state back
-so the next tick retries, and the rejection is visible in the ring.
+Sensor source (``app/sensors.py`` selects it, ``app/ccu3.py`` implements
+it): with ``t_out_source`` of ``ccu3``/``auto`` and a ``ccu3_url`` set, the
+loop reads ``t_out`` and ``lux`` from the Homematic CCU3 weather station
+(JSON-RPC over plain HTTP/1.0 on the LAN: login + one-time discovery cached
+to ``/ccu3_cache.json``, then ``Interface.getValue`` per poll). A failed
+poll keeps the last value; a value older than 10 min is dropped, which is
+the controller's defined failsafe input (no fresh ``t_out`` -> fixed safe
+flow). Without a reachable CCU3 (or with ``t_out_source: null``) the null
+source runs instead -- same failsafe semantics, so the board degrades
+safely either way.
+
+Against the dummy driver this means a healthy board *does* show control
+activity: ``transport status`` reports heating on (45 °C failsafe flow
+with null sensors, heat-curve flow with live readings), and
+``transport commands`` shows the ``set_heating`` / ``set_flow_target`` API
+calls the loop made. Rejecting or dropping a write rolls the
+controller's optimistic state back so the next tick retries, and the
+rejection is visible in the ring.
+
+## Config over the air
+
+The app config (``/app-config.json``) can be read and edited from the
+remote shell -- no USB, no rebuild. Values are type-checked against the
+shipped defaults, validated (an out-of-range value is rejected and reset,
+never persisted), and persisted to the file, which also notifies any live
+subscribers.
+
+```sh
+python micropy-system/tools/target/telnet.py DEVICE_IP config                # all values (JSON)
+python micropy-system/tools/target/telnet.py DEVICE_IP config get t_on       # one value
+python micropy-system/tools/target/telnet.py DEVICE_IP config set t_on 15    # set + validate
+python micropy-system/tools/target/telnet.py DEVICE_IP config set mqtt_enabled true
+python micropy-system/tools/target/telnet.py DEVICE_IP config reset t_on     # back to default
+python micropy-system/tools/target/telnet.py DEVICE_IP config defaults       # shipped defaults
+```
+
+Control parameters (``t_on``/``t_off``, flow limits, ``b``, solar/demand,
+``min_change``) are re-read by the control loop every tick, so a ``set``
+takes effect on the next tick. A few keys are captured at boot and need a
+reboot to change: ``control_tick_s`` (loop interval), the ``ccu3_*`` source
+settings, ``t_out_source``/``lux_source``, and ``net_port``. OTA updates
+never clobber the file: they ship new defaults, and any *new* key is seeded
+into the existing file at boot while your values are preserved.
