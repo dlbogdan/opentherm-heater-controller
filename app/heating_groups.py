@@ -62,9 +62,16 @@ def _is_etrv(itype):
 
 
 class HeatingGroups:
-    """Collect per-room setpoints + actuals (async, O(1) RAM)."""
+    """Collect per-room setpoints + actuals (async, O(1) RAM).
+
+    Implements the ``RoomsSource`` interface (``app/rooms.py``): ``enabled``
+    is True, ``poll_s`` is the refresh interval, ``read()`` does one pass, and
+    ``last()`` returns the cached aggregate. Selected via
+    ``rooms.make_rooms_source`` (not referenced by name in ``main.py``).
+    """
 
     name = "rooms"
+    enabled = True
 
     def __init__(self, config, cache_path="/ccu3_rooms_cache.json",
                  http_post=None, log=None, warn=None):
@@ -73,6 +80,7 @@ class HeatingGroups:
         self._log = log            # INFO -> console only
         self._warn = warn if warn is not None else log  # WARN/ERROR -> flash
         self._mode = (config.get("room_source") or "heating_groups")
+        self.poll_s = int(config.get("rooms_poll_s") or 300)
         self._rpc = Ccu3Rpc(config.get("ccu3_url"),
                             config.get("ccu3_user"),
                             config.get("ccu3_pass"),
