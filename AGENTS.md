@@ -124,7 +124,11 @@ leaving `ota-state.json` `active: "b"`. So a healthy board may well report
 (no network needed). It re-flashes the pinned MicroPython 1.29.0 UF2, formats
 the data LFS for a true reset, uploads the assembled device tree, and uploads a resolved
 `system-config.json` — the local (gitignored) file if present, else a default
-generated from `system-config.example.json`. It verifies the app reaches its
+generated from `system-config.example.json`. It also uploads the local
+(gitignored) `app-config.json` when present — the per-device app values (e.g.
+the CCU3 credentials; see `app-config.example.json` for the shape) — so a fresh
+board gets them without hardcoding; without it the board self-seeds the app
+defaults from `app/config.py` on first boot. It verifies the app reaches its
 main loop over USB, then performs the required final reset:
 
 ```sh
@@ -324,7 +328,11 @@ Other live-only behaviors (do not "fix" them into regressions):
   returns **403 Forbidden** -- that is expected, not a credentials problem.
 - One HTTP/1.0 request per connection, no TLS (trusted LAN).
 - Credentials are in `/app-config.json`: `ccu3_user` / `ccu3_pass` (do not
-  hardcode; `ccu3_url` carries the endpoint).
+  hardcode; `ccu3_url` carries the endpoint). They are per-device: the local
+  (gitignored) `app-config.json` in the workspace is uploaded at provisioning
+  (template: `app-config.example.json`); the `app/config.py` defaults are
+  empty on purpose, and an empty `ccu3_url` simply disables the CCU3 sources
+  (demand off, weather failsafe).
 
 **Auth (per RPC session):**
 1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
