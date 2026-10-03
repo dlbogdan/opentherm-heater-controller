@@ -216,6 +216,34 @@ Verified on the installed MicroPython 1.29.0 build:
 - The serial console may be silent. Persistent evidence must use
   `logger.info(..., log_to_file=True)` and can then be read through the
   shell's `log` command (`telnet.py <ip> log 40`).
+- `bytes.decode()` / `str.encode()` take **no keyword args** in this build:
+  `b"HTTP/1.0 200 OK".decode(errors="replace")` raises
+  `function doesn't take keyword arguments`. Use a plain `.decode()` (HTTP
+  status lines are ASCII) — never pass `errors=` / `encoding=`.
+- The heap is **tight (~290 KB free** after boot with Wi-Fi + shell + control
+  loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
+  the total free looks sufficient (fragmentation). `gc.collect()` before a
+  large read/parse, and **stream** large payloads instead of accumulating them.
+
+## On-device quirks (verified live; host tests can't catch these)
+
+The host unit tests inject a **fake `http_post`**, so the real async CCU3
+client (`app/ccu3.py`) only runs on the device. MicroPython-specific failures
+therefore surface **only live** — the `bytes.decode(errors=...)` keyword-arg
+error and the ENOMEM above both passed every host test. **Always validate new
+network code on the device** (`telnet.py <ip> log`), not just the host suite.
+
+Other live-only behaviors (do not "fix" them into regressions):
+
+- **Wi-Fi startup race:** a periodic task that does network I/O fires on its
+  first tick before Wi-Fi is up → `[Errno 113] EHOSTUNREACH`. Expected on the
+  first tick after boot; the next interval retries and succeeds. A `rooms`/
+  weather poll failing once at boot is **not** a network fault.
+- **Deploy reboot can race the OTA server / board network:** if `deploy.py`
+  reboots the board and it comes back on the *old* version (didn't promote),
+  the first boot ran its OTA check before the update server / board network
+  were ready. A **second manual `reboot` over the shell** usually promotes on
+  the next boot. Retry once before concluding the OTA failed.
 
 ## CCU3 / Homematic data reference (READ THIS before touching sensor data)
 
@@ -276,20 +304,35 @@ string (e.g. `"23.800000"`) -- parse to float; treat `""`/absent as no value.
 - `Device.listAll` returns string ids; skip small ids (`<100`) and `"12"`
   (CCU internals).
 
-**Memory-efficient polling (Pico 2W):** iterate groups **one at a time** -- read
-`SET_POINT_TEMPERATURE` + `ACTUAL_TEMPERATURE` for group *i*, fold into running
-scalars (counts, avg/max setpoint & actual, and the demand aggregates), then
-**drop group *i*'s values before group *i+1***. Never hold a per-group
-list. Only the small group identity list (iface/addr/name) is cached to flash
-(`/ccu3_groups_cache.json`). Per-poll RAM is O(1) in the number of rooms.
+**Memory-efficient polling + discovery (Pico 2W):** the board's heap is
+~290 KB free, so never accumulate large payloads:
+- **Per-poll value read:** iterate rooms **one at a time** -- read
+  `SET_POINT_TEMPERATURE` + `ACTUAL_TEMPERATURE` for room *i*, fold into
+  running scalars (counts, avg/max setpoint & actual, demand aggregates), then
+  drop room *i*'s values before room *i+1*. Per-poll RAM is O(1) in the rooms.
+- **Discovery (the OOM hazard):** `Device.get` payloads are ~10-50 KB each and
+  there are ~50 of them, so holding them all (`devs = [Device.get ...]`) OOMs
+  the board (`[Errno 12] ENOMEM`). Stream instead: `Device.get` one device,
+  fold its type/room into the small results (WTH rooms, heating groups, eTRV
+  groups), `del` the payload, and `gc.collect()` every ~10 devices.
+Only the small identity/result lists (room name + iface/addr) are cached to
+flash (`/ccu3_rooms_cache.json` for rooms, `/ccu3_cache.json` for the weather
+endpoint).
 
 **Board-side performance note (verified):** the CCU3 is fast (a host does one
 `getValue` in ~0.16s) but the **Pico is ~2.8s per RPC call** (lwIP +
 MicroPython per-connection overhead; the CCU3 sends no `Content-Length`, so
 the body is read until the server closes). A full 8-room `rooms` pass is ~47s
-and **blocks the board event loop** for its duration. It is an on-demand
-command, not a periodic one. If it must drive the control loop, the CCU3
-client needs to be made non-blocking (uasyncio) first.
+of I/O.
+
+The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
+`asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so
+a read **yields the event loop** instead of stalling the board (mirrors the
+framework's `manager_firmware.py` updater). The room pass therefore runs as its
+own periodic task (`rooms_poll_s`, default 300s) and caches the aggregate; the
+control loop reads the cached demand (fast) and the `rooms` shell command
+returns that cache (instant). **Do not revert to a blocking `usocket` client**
+— that re-introduced a board-wide stall during CCU3 slowness / retry storms.
 
 ## Framework ownership rules
 
@@ -314,6 +357,12 @@ client needs to be made non-blocking (uasyncio) first.
 - Boiler transport abstraction: commit `f8fca84`, device firmware `1.1.14`.
   The log transport's ON -> release -> stale-setpoint reset -> ON command
   sequence passed on host and through the Pico network console.
+- Non-blocking CCU3 room model: app commit `e1a8f7f`, device firmware `1.1.57`
+  (framework `7ee5e40`). The CCU3 client is async (uasyncio); the room pass
+  (7 heating-group rooms / 12 eTRV rooms) runs as its own periodic task
+  (`rooms_poll_s`) and caches the aggregate; the control loop reads the cached
+  demand; `rooms` returns the cache. Verified on-device: selftest 33/33, rooms
+  demand 4.29%, weather live, no ENOMEM, no event-loop stall.
 
 See `pico-standalone-architecture.md` for the target architecture and the
 current implementation plan in repository/session memory when available.
