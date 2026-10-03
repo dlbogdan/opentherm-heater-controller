@@ -59,7 +59,7 @@ class LogTransport(object):
 
     def record_error(self, code):
         self.ring.append(KIND_TRANSPORT_ERROR, int(code) & 0xFFFFFFFF,
-                         RESULT_EXCEPTION)
+                         result=RESULT_EXCEPTION)
 
     # -- BoilerTransport delegation (recorded) -------------------------------
     def _arg_code(self, value):
@@ -90,8 +90,9 @@ class LogTransport(object):
                 code = int(self.driver.last_error_code()) & 0xFFFFFFFF
             except Exception:
                 code = 0
-            self.ring.append(KIND_TRANSPORT_ERROR, code,
-                             RESULT_EXCEPTION if exception else RESULT_REJECTED)
+            self.ring.append(
+                KIND_TRANSPORT_ERROR, code,
+                result=RESULT_EXCEPTION if exception else RESULT_REJECTED)
 
     def set_heating(self, on):
         on = bool(on)

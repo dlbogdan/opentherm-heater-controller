@@ -9,7 +9,8 @@ APP = Path(__file__).resolve().parents[1] / "app"
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
 
-from shell_commands import make_transport_handler, register_transport_commands
+from shell_commands import (make_transport_handler, register_transport_commands,
+                            verify_json, verify_raw)
 from transport.dummy import DummyTransportDrv
 from transport.log import LogTransport
 
@@ -82,17 +83,35 @@ class LogTransportShellTests(unittest.TestCase):
         self.assertEqual(status["events"], 3)
         self.assertEqual(status["health"], "ok")
 
-    def test_demo_records_full_sequence(self):
+    def test_demo_records_full_pipeline(self):
         driver, transport = _make()
         handler = make_transport_handler(transport)
         response = handler("demo")
         self.assertIn("demo sequence", response)
+
+        # The rejected write is excluded from the API-level commands list...
         self.assertEqual(transport.commands, [
             ("set_heating", True),
             ("set_flow_target", 45.5),
-            ("set_heating", False),
             ("release_override",),
         ])
+
+        # ...but the ring kept the whole pipeline: success, the coalesced
+        # heartbeat burst, and the injected failure.
+        events = transport.recent_events(64)
+        self.assertEqual(len(events), 14)
+        kinds = [entry["kind"] for entry in events]
+        self.assertIn("ot_tx", kinds)
+        self.assertIn("transport_error", kinds)
+        bursts = [entry for entry in events if entry["kind"] == "ot_tx"]
+        self.assertEqual(bursts[0]["repeat"], 3)
+        self.assertTrue(any(entry["kind"] == "api_call" and
+                            entry["result"] == "rejected" for entry in events))
+        errors = [entry for entry in events
+                  if entry["kind"] == "transport_error"]
+        self.assertIn("no_ack", [entry.get("error") for entry in errors])
+        self.assertTrue(all(entry["result"] in ("rejected", "exception")
+                            for entry in errors))
 
     def test_explicit_snapshots(self):
         driver, transport = _make()
@@ -111,10 +130,21 @@ class LogTransportShellTests(unittest.TestCase):
             data = Path(raw_path).read_bytes()
             self.assertEqual(len(data), 4 + 16 * count)
 
-    def test_shell_save_rejects_nested_paths(self):
+            # verify_* accepts the exact same files
+            self.assertEqual(verify_json(json_path), count)
+            self.assertEqual(verify_raw(raw_path), count)
+
+    def test_shell_save_and_verify_reject_nested_paths(self):
         handler = make_transport_handler(_make()[1])
         self.assertIn("top-level", handler("save json /a/b.jsonl"))
         self.assertIn("top-level", handler("save raw relative.jsonl"))
+        self.assertIn("top-level", handler("verify json /a/b.jsonl"))
+        self.assertIn("top-level", handler("verify raw relative.jsonl"))
+
+    def test_verify_reports_missing_file(self):
+        handler = make_transport_handler(_make()[1])
+        self.assertTrue(handler("verify json /nope.jsonl").startswith(
+            "verify failed"))
 
     def test_registration_uses_telnet_extension_point(self):
         shell = _Shell()

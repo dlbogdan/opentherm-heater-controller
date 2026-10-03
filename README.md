@@ -58,14 +58,19 @@ heartbeats) coalesce into one record with a repeat count.
 python micropy-system/tools/telnet.py DEVICE_IP transport status
 python micropy-system/tools/telnet.py DEVICE_IP transport commands 20        # text
 python micropy-system/tools/telnet.py DEVICE_IP transport commands 20 json
-python micropy-system/tools/telnet.py DEVICE_IP transport demo               # smoke-test sequence
+python micropy-system/tools/telnet.py DEVICE_IP transport demo               # full pipeline smoke test
+python micropy-system/tools/telnet.py DEVICE_IP transport verify json        # re-parse the JSON snapshot
+python micropy-system/tools/telnet.py DEVICE_IP transport verify raw
 python micropy-system/tools/telnet.py DEVICE_IP transport clear
 python micropy-system/tools/telnet.py DEVICE_IP transport save json          # -> /transport-events.jsonl
 python micropy-system/tools/telnet.py DEVICE_IP transport save raw           # -> /transport-events.otlog
 ```
 
-`transport save` is opt-in only (atomic top-level-file write, never automatic)
-and exists to preserve a snapshot across a reboot or network loss; day-to-day
-inspection uses `transport commands`. The decorator is wired and live now;
-it will receive real control decisions and gateway traffic as soon as the
-control scheduler and OTGW driver are connected.
+`demo` exercises the whole recording pipeline in one shot: a normal command
+sequence, a repeated-frame burst (verifying coalescing), and an injected
+no-ack failure (verifying error records). `save`/`verify` are opt-in only
+(atomic top-level-file writes, never automatic) and exist to preserve and
+check a snapshot across a reboot or network loss; day-to-day inspection uses
+`transport commands`. The decorator is wired and live now; it will receive
+real control decisions and gateway traffic as soon as the control scheduler
+and OTGW driver are connected.
