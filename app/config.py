@@ -43,7 +43,12 @@ DEFAULTS = {
     "solar_charge": 0.15,
     "solar_halflife": 25,
     "lux_mult": 1.0,
-    # Heating demand P-term (optional; disabled by default)
+    # Heating demand P-term (optional). When enabled AND a room source
+    # provides demand, ``demand_raw`` is the rooms aggregate ``demand_pct``
+    # in PERCENT (0..100, same scale as ``demand_neutral``). No room data
+    # (null source / before the first pass / CCU3 down) always behaves as
+    # "no sensor": zero offset, permissive gate -- never blocks heating.
+    "demand_enabled": True,
     "demand_neutral": 3,
     "demand_rate": 0.1,
     "demand_exponent": 1.0,

@@ -42,6 +42,7 @@
     "control_tick_s": 60,
     "ccu3_url": "http://your-ccu3-host/api/homematic.cgi",
     "min_change": 2,
+    "demand_enabled": true,
     "demand_neutral": 3,
     "ccu3_user": "your-ccu3-user",
     "flow_max": 67

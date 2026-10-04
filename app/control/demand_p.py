@@ -1,9 +1,13 @@
-"""Step 3 of the pipeline -- optional heating-demand P-term (arch §7.3).
+"""Step 3 of the pipeline -- heating-demand P-term (arch §7.3).
 
-Implemented but **disabled by default**: with no demand sensor wired,
-``demand_raw`` defaults to ``demand_neutral`` so the offset is zero and the gate
-is always permissive (a clean no-op). Enable by feeding a real ``demand_raw`` and
-setting ``has_demand_sensor=True`` (Options B/C from the arch doc).
+``demand_raw`` is the rooms aggregate ``demand_pct`` in PERCENT (0..100),
+the same scale as ``demand_neutral``. The term is active when the device
+layer sets ``Controller.has_demand_sensor`` (config ``demand_enabled`` plus a
+live room source) AND ``demand_raw`` is not None; the controller passes that
+combined condition here. Any other input is the defined "no demand sensor"
+case: ``demand_raw`` is forced to ``demand_neutral`` (zero offset) and the
+gate is permissive (a clean no-op), so missing/stale room data never blocks
+heating.
 """
 
 from control.util import clamp, sign

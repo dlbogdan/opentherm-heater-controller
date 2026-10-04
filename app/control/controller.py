@@ -61,7 +61,7 @@ class Controller:
         self.solar_accum = 0.0          # starts 0 each boot (arch §10.2)
         self.last_solar_ts = None
         self.last_sent_flow = None      # set to off_sentinel on first tick
-        self.has_demand_sensor = False  # no demand sensor by default
+        self.has_demand_sensor = False  # main.py wires this from config+rooms
 
     def tick(self, now_ms, params, t_out, lux=None, demand_raw=None):
         """Run one control tick and return a :class:`Decision`.
@@ -98,9 +98,15 @@ class Controller:
             self.solar_accum, t_out, lux, now_ms, self.last_solar_ts, params)
         self.last_solar_ts = now_ms
 
-        # 4. Demand P-term + gate (a no-op without a demand sensor).
-        dem_off = demand_offset(demand_raw, params, self.has_demand_sensor)
-        gate_on = demand_gate_allows_on(demand_raw, params, self.has_demand_sensor)
+        # 4. Demand P-term + gate (a no-op without a demand sensor). A missing
+        # reading (``demand_raw is None``: null source, no room data yet, or a
+        # dead room backend) is the defined "no sensor" input -- zero offset and
+        # a permissive gate -- so stale room data can never suppress heat.
+        # ``demand_raw`` is the rooms ``demand_pct`` in PERCENT (0..100), the
+        # same scale as ``demand_neutral``.
+        has_demand = self.has_demand_sensor and demand_raw is not None
+        dem_off = demand_offset(demand_raw, params, has_demand)
+        gate_on = demand_gate_allows_on(demand_raw, params, has_demand)
 
         # 5. Combine.  6. Clamp to flow limits.
         target_raw = bf + dem_off - solar_off

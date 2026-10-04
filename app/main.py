@@ -208,6 +208,12 @@ async def main():
     # connect -- no failing I/O, no full-interval dead wait.
     from rooms import make_rooms_source
     rooms = make_rooms_source(config, log=log, warn=warn)
+    # Demand P-term + gate (controller step 4): enabled from config when a
+    # room source exists to feed it. A missing reading is still the defined
+    # "no sensor" input inside the controller, so this can never strand the
+    # heating on a cold day if the CCU3 is down.
+    controller.has_demand_sensor = (
+        bool(config.get("demand_enabled")) and rooms.enabled)
     if rooms.enabled:
         async def rooms_tick():
             if not await _net_ready(120 * 1000):
@@ -234,12 +240,16 @@ async def main():
             t_out, lux, _ = await sensor_source.read()
         else:
             t_out, lux = None, None
-        # Demand (0..1) from the cached room aggregate; the null source (no
-        # room data configured) yields None -> the control loop runs on weather.
+        # Heating demand from the cached room aggregate -- the ReGaHd
+        # ``demand_pct`` in PERCENT (0..100, the same scale as
+        # ``demand_neutral``). None before the first pass, or with no room
+        # backend: the defined "no sensor" input (zero offset, permissive
+        # gate). The P-term/gate itself is enabled by ``demand_enabled``
+        # (wired onto the controller below).
         demand = None
         agg = rooms.last()
         if agg and agg.get("demand_pct") is not None:
-            demand = agg["demand_pct"] / 100.0
+            demand = agg["demand_pct"]
 
         def read_sensors():
             return (t_out, lux, demand)
@@ -317,11 +327,13 @@ async def main():
     #    validation above before any future control task can consume it.
     logger.info(
         "App: t_off=%s t_on=%s flow[%s..%s] min_on=%s design=%s/%s transport=%s"
-        " | heating_on=%s"
+        " | heating_on=%s demand=%s(%s)"
         % (config.get("t_off"), config.get("t_on"), config.get("flow_min"),
            config.get("flow_max"), config.get("flow_min_on"),
            config.get("flow_design"), config.get("t_design"),
-           config.get("transport"), state.heating_on))
+           config.get("transport"), state.heating_on,
+           "on" if controller.has_demand_sensor else "off",
+           "rooms" if rooms.enabled else "no-source"))
 
     # 4. Heartbeat -- the serial-console test surface for Step 0.
     #    INFO-level: serial console only, never written to flash (see the
