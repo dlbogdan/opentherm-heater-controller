@@ -50,6 +50,13 @@ from lib.coresys.manager_tasks import TaskManager
 from config import config
 from state import state
 
+# Live wiring handle (read-only BY CONVENTION): populated once in main() so
+# diagnostics and the device test suites can observe the EXACT objects the
+# control loop uses (an autotest does ``import app_entry`` -> the already
+# imported live module). Suites may read these; they must NEVER actuate
+# through them -- behavioral tests build fresh dummies instead.
+LIVE = {}
+
 
 def _make_wifi(sys_config):
     """Build a WiFiManager from framework config. Returns (wifi, has_ssid)."""
@@ -208,6 +215,7 @@ async def main():
     # connect -- no failing I/O, no full-interval dead wait.
     from rooms import make_rooms_source
     rooms = make_rooms_source(config, log=log, warn=warn)
+    LIVE.update(transport=transport, rooms=rooms, controller=controller)
     # Demand P-term + gate (controller step 4): enabled from config when a
     # room source exists to feed it. A missing reading is still the defined
     # "no sensor" input inside the controller, so this can never strand the

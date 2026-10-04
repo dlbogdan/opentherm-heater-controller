@@ -154,6 +154,10 @@ class HeatingGroups:
             "max_delta": max_delta,
             "max_delta_room": max_delta_name,
             "demand_pct": demand_pct,
+            # When this aggregate was produced (ticks_ms at pass completion):
+            # lets consumers (shell, device tests) check freshness against
+            # rooms_poll_s instead of trusting the cache blindly.
+            "ts": _now_ms(),
         }
         self._last = result  # keep for the sync `rooms` command
         return result
@@ -244,6 +248,7 @@ class HeatingGroups:
         wth_rooms = set()          # rooms that contain a WTH (filter)
         heating = []               # (room_id, addr, iface) -- a handful
         etrv_by_room = {}          # room_id -> {"addrs": [...], "iface"}
+        heating_seen = set()       # rooms already claimed by a group
         ids = await self._rpc.call("Device.listAll", {}) or []
         seen = 0
         for device_id in ids:
@@ -261,7 +266,12 @@ class HeatingGroups:
             if _is_wth(dtype) and room_id is not None:
                 wth_rooms.add(room_id)
             if _is_heating(dtype) and room_id is not None:
-                heating.append((room_id, addr, iface))
+                # One group per room (the AGENTS.md aggregate): a second
+                # HmIP-HEATING in the same room must NOT double-count the
+                # room in the demand denominator.
+                if room_id not in heating_seen:
+                    heating_seen.add(room_id)
+                    heating.append((room_id, addr, iface))
             if _is_etrv(dtype) and room_id is not None:
                 entry = etrv_by_room.setdefault(
                     room_id, {"addrs": [], "iface": iface})
