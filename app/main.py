@@ -316,6 +316,17 @@ async def main():
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
         register_rooms_commands(shell, rooms)
+        # Device test suites (framework runner): unittest-style suites are
+        # pushed to /autotests by the host tool (tools/target/autotest.py)
+        # and run INSIDE this loop -- live singletons, real async I/O, heap
+        # and timeout guarded. The runner module itself is pushed to
+        # /lib/coresys by the same tool: a board that never received it
+        # (production firmware) simply has no 'test' command.
+        try:
+            from lib.coresys.autotest import register as register_autotests
+            register_autotests(shell, warn=warn)
+        except ImportError:
+            pass
         tasks.create_task(
             _run_optional_service(shell.start(), "remote shell"),
             task_id="net_service",

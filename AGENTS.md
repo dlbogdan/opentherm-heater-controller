@@ -14,7 +14,8 @@ Tools are grouped by function under `micropy-system/tools/`
 **`target/`** (everything that talks to a Pico): `provision.py` (USB
 provisioning engine), `capture_boot.py` (serial capture across reset),
 `device.py` (USB CLI), `discover.py` (LAN scanner), `telnet.py` (shell
-client), `net.py` (shell command wrapper), `render_config.py` (config
+client), `autotest.py` (push + remotely run on-device test suites),
+`net.py` (shell command wrapper), `render_config.py` (config
 resolution), `serve_update.py` (OTA update server), `deploy.py` (bump →
 build → serve → OTA → promotion poll → self-test), `capture_baseline.py`
 (hardware reliability baseline).
@@ -66,9 +67,21 @@ python micropy-system/tools/target/telnet.py 10.9.30.76 selftest
 python micropy-system/tools/target/telnet.py 10.9.30.76 transport status   # audit ring
 python micropy-system/tools/target/telnet.py 10.9.30.76 config            # app config (JSON)
 python micropy-system/tools/target/telnet.py 10.9.30.76 config set t_on 15
+python micropy-system/tools/target/telnet.py 10.9.30.76 test list          # device test suites
 python micropy-system/tools/target/telnet.py 10.9.30.76      # interactive (try 'repl')
 python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 # or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
+```
+
+Device test suites (framework `lib.coresys.autotest` + `tools/target/autotest.py`):
+unittest-style suites live in the PROJECT's `autotests/` (host, never in the
+OTA package), are pushed to the board's `/autotests` over USB, and run
+remotely inside the live app's loop over the shell's `test run [PATTERN]`
+(live singletons, real async I/O, per-test timeout + heap guard):
+
+```sh
+python micropy-system/tools/target/autotest.py sync      # push (USB) + run (LAN)
+python micropy-system/tools/target/telnet.py 10.9.30.76 test run config
 ```
 
 A reboot runs the boot-time OTA check first, so the shell may be unavailable
@@ -306,6 +319,26 @@ network code on the device** (`telnet.py <ip> log`), not just the host suite.
 
 Other live-only behaviors (do not "fix" them into regressions):
 
+- **A MicroPython `async def` result has NO `__await__`.** It is a plain
+  generator (`send`/`throw`/`__next__` only), so the CPython idiom
+  `hasattr(x, "__await__")` to detect a coroutine is **False on-device** —
+  the object is silently treated as a value. Episode 2026-10-04 (twice):
+  the shell's async-handler dispatch printed `<generator object ...>` as the
+  command output, and the autotest runner **vacuously passed every async
+  test** (the tell: 24 ms "passes" for tests doing multi-second CCU3 I/O).
+  Detect with `hasattr(x, "__await__") or (hasattr(x, "send") and
+  hasattr(x, "throw") and hasattr(x, "__next__"))` (both fixed in
+  `telnet_service.py` + `autotest.py`; host tests pin the predicate).
+- **The CCU3 caps concurrent JSON-RPC sessions.** One `Session.login` per
+  test exhausted the pool; every subsequent login failed with `invalid
+  credentials or too many sessions` until idle sessions expired (minutes).
+  On-device CCU3 suites must share ONE session for the whole module (create
+  lazily, reuse), and login with backoff. The board's own app sessions count
+  against the same pool.
+- **`mpremote fs cp` needs the `:` prefix for remote ABSOLUTE paths**
+  (`:...autotest.py :/lib/coresys/autotest.py`); without it mpremote treats
+  the target as local and dies with `No such file or directory`. Same for
+  `fs ls`/`fs mkdir`.
 - **Wi-Fi startup race:** a periodic task that does network I/O fires on its
   first tick before Wi-Fi is up → `[Errno 113] EHOSTUNREACH`. Expected on the
   first tick after boot; the next interval retries and succeeds. A `rooms`/
