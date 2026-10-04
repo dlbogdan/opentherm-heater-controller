@@ -37,7 +37,7 @@ async def _login_with_backoff(rpc, attempts=4, base_s=3.0):
     for attempt in range(attempts):
         try:
             return await rpc.login()
-        except Ccu3Error as exc:
+        except (Ccu3Error, OSError) as exc:
             last = exc
             if attempt < attempts - 1:
                 await asyncio.sleep(base_s * (attempt + 1))
@@ -53,6 +53,25 @@ async def _rpc():
     return _state["rpc"]
 
 
+async def _retry_once(coro_factory, what):
+    """Run an RPC step once; retry once on a transient socket OSError.
+
+    The suite shares the board with the app's OWN periodic CCU3 polls, and
+    the Pico heap is tight: a concurrent socket open can transiently fail
+    with ENOMEM/EHOSTUNREACH (AGENTS.md). One retry separates that real
+    contention from a genuine protocol failure (which fails twice).
+    """
+    try:
+        return await coro_factory()
+    except OSError:
+        await asyncio.sleep(1.0)
+        return await coro_factory()
+
+
+async def _call(rpc, method, params):
+    return await _retry_once(lambda: rpc.call(method, params), method)
+
+
 async def _source():
     if _state["source"] is None:
         from ccu3 import Ccu3SensorSource
@@ -60,14 +79,38 @@ async def _source():
     return _state["source"]
 
 
+async def _wait_wifi(timeout_s=60):
+    """Wait (bounded) for the app's Wi-Fi to come up, like main.py does.
+
+    A sync test cannot be wrapped by the runner's wait_for, so I/O tests
+    must START with Wi-Fi already up: running at t+4s after a push-reset
+    means racing DHCP and the app's own boot-time poll on a tight heap
+    (that race is real -- the app's first poll can ENOMEM -- and a suite
+    must not fail for a documented, self-healing transient).
+    """
+    deadline = _now_ms() + timeout_s * 1000
+    import network
+    sta = network.WLAN(network.STA_IF)
+    while _now_ms() < deadline:
+        try:
+            if sta.active() and sta.isconnected():
+                return True
+        except OSError:
+            pass
+        await asyncio.sleep(1.0)
+    return False
+
+
 class TestCcu3Rpc(unittest.TestCase):
     """Read-only RPC against the live CCU3 (one shared module session)."""
 
     timeout_s = 150  # ~2.8 s per RPC on the Pico; a cold scan is dozens
 
-    def setUp(self):
+    async def setUp(self):
         if not config.get("ccu3_url"):
             self.skipTest("no ccu3_url configured")
+        if not await _wait_wifi():
+            self.skipTest("Wi-Fi did not come up")
 
     async def test_login_returns_session(self):
         rpc = await _rpc()
@@ -75,7 +118,7 @@ class TestCcu3Rpc(unittest.TestCase):
 
     async def test_device_list_all(self):
         rpc = await _rpc()
-        ids = await rpc.call("Device.listAll", {})
+        ids = await _call(rpc, "Device.listAll", {})
         self.assertTrue(isinstance(ids, list))
         self.assertGreater(len(ids), 10)  # this house has ~50 devices
 
@@ -136,7 +179,7 @@ class TestCcu3Rpc(unittest.TestCase):
         seen = 0
         for device_id in ids:
             try:
-                device = await rpc.call("Device.get", {"id": device_id})
+                device = await _call(rpc, "Device.get", {"id": device_id})
             except Ccu3Error:
                 continue  # CCU Tcl-error devices: skip, keep scanning
             matched = (isinstance(device, dict)
@@ -153,9 +196,9 @@ class TestCcu3Rpc(unittest.TestCase):
 
     async def _value(self, rpc, endpoint, key):
         iface, addr = endpoint
-        raw = await rpc.call(
-            "Interface.getValue",
-            {"interface": iface, "address": addr + ":1", "valueKey": key})
+        raw = await _call(rpc, "Interface.getValue",
+                          {"interface": iface, "address": addr + ":1",
+                           "valueKey": key})
         if isinstance(raw, dict):
             raw = raw.get("value")
         return float(raw)
@@ -166,13 +209,21 @@ class TestWeatherSource(unittest.TestCase):
 
     timeout_s = 120
 
-    def setUp(self):
+    async def setUp(self):
         if not config.get("ccu3_url"):
             self.skipTest("no ccu3_url configured")
+        if not await _wait_wifi():
+            self.skipTest("Wi-Fi did not come up")
 
     async def test_source_read_returns_sane_weather(self):
         source = await _source()
         t_out, lux, demand = await source.read()
+        if t_out is None:
+            # A transient ENOMEM/EHOSTUNREACH on the source's very first
+            # poll (shared heap + the app's own poll racing at boot) is
+            # expected; the defined recovery is "next interval retries".
+            await asyncio.sleep(2.0)
+            t_out, lux, demand = await source.read()
         self.assertIsNotNone(t_out, "weather poll produced no t_out")
         self.assertTrue(-40.0 < t_out < 60.0)
         self.assertTrue(lux is None or 0.0 <= lux <= 200000.0)
@@ -183,9 +234,15 @@ class TestWeatherSource(unittest.TestCase):
         # the SAME real values (proof the periodic control loop reads are
         # bounded, not one RPC storm per tick). The sanity precondition makes
         # a (None, None) == (None, None) equality impossible to pass
-        # vacuously.
+        # vacuously; the two short waits absorb a boot-race ENOMEM on the
+        # very first poll (defined behavior: next interval retries).
         source = await _source()
         first = await source.read()
+        for _ in range(2):
+            if first[0] is not None:
+                break
+            await asyncio.sleep(2.0)
+            first = await source.read()
         self.assertIsNotNone(first[0], "no live t_out to compare")
         second = await source.read()
         self.assertEqual(first, second)
