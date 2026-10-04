@@ -409,6 +409,75 @@ control loop reads the cached demand (fast) and the `rooms` shell command
 returns that cache (instant). **Do not revert to a blocking `usocket` client**
 — that re-introduced a board-wide stall during CCU3 slowness / retry storms.
 
+## OTGW / OpenTherm data reference (READ THIS before touching boiler transport)
+
+> This is the canonical recipe for driving the boiler through an OTGW in
+> **standalone mode (no thermostat on the gateway's X1 terminals)** -- which is
+> how this house is wired. It is easy to get wrong, so do **not** assume a
+> setpoint is "set and forget" and do **not** guess the CS/CH mapping. Verified
+> against the OTGW documentation (otgw.tclcode.com, `standalone.html` +
+> `firmware.html`). The real `OTGWTransportDrv` is **not written yet** -- the
+> transport is still `DummyTransportDrv` -- so hold this contract in mind before
+> wiring the real gateway, and validate against it.
+
+**A setpoint is a held state, not a command.** OTGW (standalone) sends a fixed
+message sequence to the boiler (MsgID 1 = Control Setpoint among them); we
+override what it sends via the `CS` serial command.
+
+**The 1-minute re-assert rule (the critical one):**
+
+> "A CS command with a value of **8 or higher** must be **repeated at least
+> every minute** as long as adjustment is needed. This is a vigilance check to
+> prevent runaway heating in case the controlling program loses its connection,
+> or crashes." — `firmware.html`, `CS` command
+
+> "The OTGW tries to mitigate this risk by requiring a setpoint of **8 degrees
+> or more to be repeated once per minute. If that doesn't happen, the OTGW
+> reverts to passing the control setpoint it receives from the thermostat, or
+> 0 if no thermostat is connected**." — `standalone.html`, Considerations
+
+So a **CS >= 8 degC is an *active* setpoint that EXPIRES in about a minute
+unless re-asserted**. In standalone mode (our case) it expires to **0** -- the
+boiler stops heating. This is a deliberate safety feature, not a quirk.
+Consequences for this codebase (do not "fix" them away):
+
+- **Re-assert CS (>= 8 degC) at least every minute, regardless of whether the
+  value changed.** `control/rate_limit.py` suppresses re-writes when the value is
+  stable -- that is exactly the case that MUST still re-assert. The rate limiter's
+  "skip" must never suppress the mandatory re-assert.
+- **`control_tick_s` (default 60 s) has ZERO margin** against the 60 s limit; any
+  jitter (a slow CCU3 read, event-loop load) loses the setpoint. Use a dedicated
+  re-assert cadence of **~30 s** (2x safety margin), **decoupled from the
+  control tick** (the tick may run slower to recompute the target).
+- **`off_sentinel = 20.0` is >= 8 degC -- wrong for "off".** 20 degC is an
+  *active* setpoint (heats the boiler to 20 degC AND would require per-minute
+  re-assert). "Off" must map to **CS = 0 (or < 8) + CHenable = 0**, not CS = 20.
+  Revisit this when building the driver.
+
+**The CS / CH mapping (on/off):**
+- **`CS=<temp>`** -- the control setpoint OTGW sends in MsgID 1. A non-zero CS
+  also controls the **CHenable bit (bit 0 of MsgID 0)**, initially 1. **`CS=0`**
+  = "external control off" -> OTGW falls back to its internal default CS of
+  **10 degC** and clears CHenable.
+- **`CH=0/1`** -- the CHenable bit (boiler on/off) in MsgID 0, applied while CS
+  is non-zero.
+- **To stop the boiler** -- "set the control setpoint to some low value and clear
+  the CH enable bit using the CH command" (`firmware.html`). So: **off =
+  `CS=0` (or a sub-8 value) + `CH=0`**; **on = `CS=<target>=8` + `CH=1`**.
+- **CS >= 8** = active, must be re-asserted every minute. **CS < 8** = "safe",
+  no re-assert needed.
+
+**Design contract for `OTGWTransportDrv` (when it is written):**
+- Track the last asserted CS + its timestamp; **re-assert on a ~30 s cadence**
+  (in `tick()` or a dedicated periodic task) AND immediately on a value change.
+- Map decision `heat` -> `CS=<target>` + `CH=1`; `off` -> `CS=0` + `CH=0`.
+- **Read back the actual CS (MsgID 1 / data point 1)** to reconcile: if it has
+  drifted from the intended value (the gateway reverted it), re-assert. Note
+  `read_flow_temp()` is the *measured* flow temperature (data point 25), NOT the
+  setpoint -- do not use it to decide "is the setpoint still held?".
+- `read_setpoint()` (data point 1) is the correct "held?" check; add it to the
+  `BoilerTransport` contract.
+
 ## Framework ownership rules
 
 - Use `lib.coresys.manager_wifi.WiFiManager`; credentials come from
