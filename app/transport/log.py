@@ -1,9 +1,9 @@
 """Bounded in-memory audit decorator in front of a transport driver.
 
-``LogTransport`` wraps any ``BoilerTransport`` driver (``DummyTransportDrv``,
-later ``OTGWTransportDrv`` / ``OTDirectTransportDrv``) and records every
-high-level API call plus the protocol-level events the driver reports through
-its trace sink. Storage is a fixed 16-byte-per-record binary ring
+``LogTransport`` wraps any ``BoilerTransport`` driver (``DummyOTGW`` /
+``DummyDirectOT``, later ``OTGWTransportDrv`` / ``OTDirectTransportDrv``) and
+records every high-level API call plus the protocol-level events the driver
+reports through its trace sink. Storage is a fixed 16-byte-per-record binary ring
 (``transport.audit``) -- RAM use is exactly ``capacity * 16`` bytes, it never
 grows, and nothing touches flash unless a diagnostic explicitly saves a
 snapshot. Readable JSON/text is decoded on demand by the shell callbacks.
@@ -138,8 +138,15 @@ class LogTransport(object):
     def read_modulation(self):
         return self.driver.read_modulation()
 
+    def read_setpoint(self):
+        return self.driver.read_setpoint()
+
     def health(self):
         return self.driver.health()
+
+    @property
+    def reassert_interval_s(self):
+        return getattr(self.driver, "reassert_interval_s", 0)
 
     def tick(self, now_ms):
         return self.driver.tick(now_ms)
@@ -154,6 +161,7 @@ class LogTransport(object):
             "dropped": self.ring.dropped,
             "last_sequence": self.ring.sequence,
             "last_error": self.driver.last_error_code(),
+            "setpoint": self.driver.read_setpoint(),
             "flow_temp": self.driver.read_flow_temp(),
             "return_temp": self.driver.read_return_temp(),
             "modulation": self.driver.read_modulation(),

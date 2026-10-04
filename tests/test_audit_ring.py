@@ -10,7 +10,7 @@ if str(APP) not in sys.path:
 from transport.audit import (AuditRing, KIND_OTGW_COMMAND, KIND_OT_RX,
                             KIND_OT_TX, RECORD_SIZE, RESULT_OK,
                             decode_record, format_record, otgw_encode)
-from transport.dummy import DummyTransportDrv
+from transport.dummy_otgw import DummyOTGW
 from transport.log import LogTransport
 
 
@@ -65,7 +65,7 @@ class AuditRingTests(unittest.TestCase):
 
 class DriverAuditFlowTests(unittest.TestCase):
     def test_rejected_write_records_error(self):
-        driver = DummyTransportDrv(fail_next=True)
+        driver = DummyOTGW(fail_next=True)
         transport = LogTransport(driver)
         self.assertFalse(transport.set_heating(True))
         kinds = [entry["kind"] for entry in transport.recent_events(4)]
@@ -74,7 +74,7 @@ class DriverAuditFlowTests(unittest.TestCase):
         self.assertNotIn("otgw_ack", kinds)
 
     def test_exception_is_recorded_and_reraised(self):
-        class _Boom(DummyTransportDrv):
+        class _Boom(DummyOTGW):
             def set_heating(self, on):
                 raise OSError("link down")
 

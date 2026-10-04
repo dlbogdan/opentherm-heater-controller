@@ -417,8 +417,9 @@ returns that cache (instant). **Do not revert to a blocking `usocket` client**
 > setpoint is "set and forget" and do **not** guess the CS/CH mapping. Verified
 > against the OTGW documentation (otgw.tclcode.com, `standalone.html` +
 > `firmware.html`). The real `OTGWTransportDrv` is **not written yet** -- the
-> transport is still `DummyTransportDrv` -- so hold this contract in mind before
-> wiring the real gateway, and validate against it.
+> transport is still the debug dummy `DummyOTGW`, which mirrors the contract
+> (re-assert cadence + the expiry, via `simulate_expiry=True`) -- so hold this
+> contract in mind before wiring the real gateway, and validate against it.
 
 **A setpoint is a held state, not a command.** OTGW (standalone) sends a fixed
 message sequence to the boiler (MsgID 1 = Control Setpoint among them); we

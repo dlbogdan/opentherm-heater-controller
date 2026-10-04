@@ -336,7 +336,10 @@ main.py
 │   ├── opentherm.py     ← OpenTherm frame codec (F88/HB values, parity, names)
 │   ├── audit.py         ← fixed 16-byte audit ring + text/JSON decoders
 │   ├── log.py           ← LogTransport: bounded audit decorator over a driver
-│   ├── dummy.py         ← DummyTransportDrv (current): simulated OTGW CH/CS + ack
+│   ├── dummy_base.py    ← shared dummy plumbing (state, test hooks, reads)
+│   ├── dummy_otgw.py    ← DummyOTGW (current): OTGW CH/CS + ack, 1-min re-assert
+│   ├── dummy_directot.py← DummyDirectOT (debug): raw OpenTherm frames
+│   ├── factory.py       ← make_transport: picks the driver from app config
 │   ├── otgw.py          ← OTGWTransportDrv (first real): 30 s override refresh, reconnect
 │   └── direct_ot.py     ← OTDirectTransportDrv (later): PIO Manchester, heartbeat
 ├── ui/

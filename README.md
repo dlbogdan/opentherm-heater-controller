@@ -46,8 +46,8 @@ board, and then use local HTTP OTA normally.
 ## Recording transport diagnostics
 
 The control loop writes through a `LogTransport` audit decorator that wraps the
-boiler driver (today `DummyTransportDrv`, later `OTGWTransportDrv` /
-`OTDirectTransportDrv`). Every API call and every protocol event the driver
+boiler driver (today the debug dummies `DummyOTGW` / `DummyDirectOT`, later
+`OTGWTransportDrv` / `OTDirectTransportDrv`). Every API call and every protocol event the driver
 reports (OTGW `CH`/`CS` + acknowledgements, raw OpenTherm frames once a
 direct-OT driver exists) lands in a **bounded in-memory ring**: 64 fixed
 16-byte records (1 KB) that never grows and never touches flash. Readable

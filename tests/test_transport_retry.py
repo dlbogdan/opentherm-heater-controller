@@ -9,18 +9,18 @@ if str(APP) not in sys.path:
 
 from control.controller import Controller
 from transport.base import ERR_NO_ACK, apply_decision
-from transport.dummy import DummyTransportDrv
+from transport.dummy_otgw import DummyOTGW
 from transport.log import LogTransport
 from selftest import _params
 
 
-class _RejectingDrv(DummyTransportDrv):
+class _RejectingDrv(DummyOTGW):
     def set_flow_target(self, temp_c):
         self._last_error = ERR_NO_ACK
         return False
 
 
-class _RaisingDrv(DummyTransportDrv):
+class _RaisingDrv(DummyOTGW):
     def set_flow_target(self, temp_c):
         raise OSError("link down")
 

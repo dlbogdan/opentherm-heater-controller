@@ -11,7 +11,7 @@ if str(APP) not in sys.path:
 
 from shell_commands import (make_transport_handler, register_transport_commands,
                             verify_json, verify_raw)
-from transport.dummy import DummyTransportDrv
+from transport.dummy_otgw import DummyOTGW
 from transport.log import LogTransport
 
 
@@ -24,7 +24,7 @@ class _Shell:
 
 
 def _make(capacity=64):
-    driver = DummyTransportDrv()
+    driver = DummyOTGW()
     return driver, LogTransport(driver, capacity=capacity)
 
 
@@ -79,7 +79,7 @@ class LogTransportShellTests(unittest.TestCase):
         self.assertEqual(api[-1]["value"], 42)
 
         status = json.loads(handler("status"))
-        self.assertEqual(status["driver"], "DummyTransportDrv")
+        self.assertEqual(status["driver"], "DummyOTGW")
         self.assertEqual(status["events"], 3)
         self.assertEqual(status["health"], "ok")
 
@@ -97,9 +97,10 @@ class LogTransportShellTests(unittest.TestCase):
         ])
 
         # ...but the ring kept the whole pipeline: success, the coalesced
-        # heartbeat burst, and the injected failure.
+        # heartbeat burst, and the injected failure. The off path is the
+        # documented OTGW sequence (CS=0 then CH=0).
         events = transport.recent_events(64)
-        self.assertEqual(len(events), 14)
+        self.assertEqual(len(events), 16)
         kinds = [entry["kind"] for entry in events]
         self.assertIn("ot_tx", kinds)
         self.assertIn("transport_error", kinds)

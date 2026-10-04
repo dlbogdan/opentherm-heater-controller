@@ -41,11 +41,32 @@ class BoilerTransport:
     def read_modulation(self):
         raise NotImplementedError
 
+    def read_setpoint(self):
+        """The control setpoint currently held by the boiler (degC), or None.
+
+        This is the "is the setpoint still held?" check (OpenTherm data
+        point 1 / OTGW CS read-back) -- NOT the measured flow temperature
+        (``read_flow_temp``, data point 25).
+        """
+        return None
+
     def health(self):
         raise NotImplementedError
 
+    @property
+    def reassert_interval_s(self):
+        """Seconds between mandatory setpoint re-asserts (0 = none required).
+
+        OTGW requires a control setpoint of >= 8 degC to be re-asserted at
+        least every minute (the vigilance check; see the OTGW section of
+        AGENTS.md). Backends whose boiler holds the setpoint on its own
+        (e.g. direct OpenTherm) return 0.
+        """
+        return 0
+
     def tick(self, now_ms):
-        raise NotImplementedError
+        """Driver maintenance hook (e.g. the OTGW CS re-assert); no-op default."""
+        return None
 
 
 def apply_decision(transport, decision, controller=None):

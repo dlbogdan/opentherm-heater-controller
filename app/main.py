@@ -148,11 +148,13 @@ async def main():
 
     # Shared audited transport: LogTransport (bounded in-memory ring) wraps
     # the driver; the shell observes this exact instance and the control loop
-    # applies its decisions through the same object. DummyTransportDrv
-    # simulates OTGW CH/CS + ack traffic until OTGWTransportDrv lands.
+    # applies its decisions through the same object. The driver is selected
+    # by config (transport: "otgw" | "direct_ot"); until the real gateway
+    # drivers land each backend is its debug dummy (DummyOTGW / DummyDirectOT)
+    # mirroring the real commands, fully observable via the `transport` shell.
     from transport.log import LogTransport
-    from transport.dummy import DummyTransportDrv
-    transport = LogTransport(DummyTransportDrv())
+    from transport.factory import make_transport
+    transport = LogTransport(make_transport(config))
 
     # 2b. Control loop: sensors -> controller -> audited transport. The
     #     interval is configurable (control_tick_s, seconds; applied at boot)
@@ -254,6 +256,29 @@ async def main():
     logger.info(
         "App: control loop started (tick %ds, first tick immediate; actuation "
         "held on candidate/degraded boot)." % tick_s)
+
+    # OTGW vigilance rule (AGENTS.md, OTGW section): a control setpoint of
+    # >= 8 degC EXPIRES at the gateway after about a minute unless re-asserted
+    # (standalone mode reverts it to 0). The control tick (default 60 s) has
+    # ZERO margin against that limit, so the re-assert runs on its own faster
+    # cadence (cs_reassert_s, default 30 s) that drives transport.tick() --
+    # which is idempotent, so it coexists with the control tick's tick call.
+    # Only backends with the obligation expose a non-zero reassert_interval_s
+    # (DummyOTGW / the future OTGWTransportDrv; direct OT returns 0).
+    reassert_s = int(transport.reassert_interval_s or 0)
+    if reassert_s > 0:
+        def reassert_tick():
+            try:
+                transport.tick(time.ticks_ms())
+            except Exception as exc:
+                warn("Transport: CS re-assert failed: %s" % exc)
+
+        tasks.create_periodic_task(
+            reassert_tick, interval_ms=reassert_s * 1000,
+            task_id="otgw_reassert",
+            description="OTGW CS re-assert (sub-minute vigilance)",
+            is_coroutine=False)
+        logger.info("App: CS re-assert task started (every %ds)." % reassert_s)
 
     if has_ssid:
         _apply_static_ip()  # no-op unless a static IP is configured

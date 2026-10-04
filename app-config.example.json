@@ -7,6 +7,7 @@
     "ccu3_poll_s": 60,
     "lux_high": 40000,
     "transport": "otgw",
+    "cs_reassert_s": 30,
     "t_out_source": "auto",
     "lux_mult": 1.0,
     "b": 0.78,

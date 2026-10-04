@@ -55,6 +55,10 @@ DEFAULTS = {
     # Transport
     "transport": "otgw",          # "otgw" | "direct_ot"
     "off_sentinel": 20.0,
+    # OTGW re-assert cadence (seconds): a CS >= 8 degC must be re-asserted at
+    # least every minute (AGENTS.md, OTGW section), so this stays sub-minute
+    # (default 30 s = 2x margin). Ignored by "direct_ot" (no obligation).
+    "cs_reassert_s": 30,
     # Sensor sources (arch §3.5)
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"
     "lux_source": "auto",
@@ -199,6 +203,9 @@ class Config:
              "min_change must be >= 0"),
             ("control_tick_s", v["control_tick_s"] >= 5,
              "control_tick_s must be >= 5"),
+            ("cs_reassert_s", v["cs_reassert_s"] >= 5
+             and v["cs_reassert_s"] < 60,
+             "cs_reassert_s must be 5..59 (OTGW needs a sub-minute re-assert)"),
             ("rooms_poll_s", v["rooms_poll_s"] >= 30,
              "rooms_poll_s must be >= 30"),
             ("net_port", 1 <= v["net_port"] <= 65535,

@@ -145,7 +145,7 @@ def run():
     from control_loop import run_control_tick
     from transport.audit import (KIND_API_CALL, RESULT_EXCEPTION,
                                  RESULT_OK, RESULT_REJECTED)
-    from transport.dummy import DummyTransportDrv
+    from transport.dummy_otgw import DummyOTGW
     from transport.log import LogTransport
 
     class _FakeState(object):
@@ -163,7 +163,7 @@ def run():
 
     st = _FakeState()
     ctl = Controller(initial_heating_on=False)
-    drv = DummyTransportDrv()
+    drv = DummyOTGW()
     logt = LogTransport(drv)
     d = run_control_tick(ctl, logt, st, p, _read_none, 0)
     c.ok("loop: null sensors -> failsafe heat decision",
@@ -179,7 +179,7 @@ def run():
     st_held = _FakeState()
     st_held.candidate_boot = True
     ctl_held = Controller(initial_heating_on=False)
-    drv_held = DummyTransportDrv()
+    drv_held = DummyOTGW()
     logt_held = LogTransport(drv_held)
     d_held = run_control_tick(ctl_held, logt_held, st_held, p, _read_none, 0)
     c.ok("loop: candidate boot -> held (no actuation, no persistence)",
@@ -190,7 +190,7 @@ def run():
 
     st_rej = _FakeState()
     ctl_rej = Controller(initial_heating_on=False)
-    drv_rej = DummyTransportDrv()
+    drv_rej = DummyOTGW()
     drv_rej.set_fail_next()  # next write: command sent, no ack
     logt_rej = LogTransport(drv_rej)
     run_control_tick(ctl_rej, logt_rej, st_rej, p, _read_none, 0)
@@ -205,7 +205,7 @@ def run():
 
     st_skip = _FakeState()
     ctl_skip = Controller(initial_heating_on=False)
-    drv_skip = DummyTransportDrv()
+    drv_skip = DummyOTGW()
     logt_skip = LogTransport(drv_skip)
     d_a = run_control_tick(ctl_skip, logt_skip, st_skip, p, _read_cold, 0)
     c.ok("loop: cold -> heat applied to driver",
@@ -218,7 +218,7 @@ def run():
     # and the one-time stale setpoint reset that the checks above do not cover.
     from transport.base import apply_decision
     seq_ctl = Controller(initial_heating_on=False)
-    seq_tr = LogTransport(DummyTransportDrv())
+    seq_tr = LogTransport(DummyOTGW())
     heat_1 = seq_ctl.tick(0, p, 10.0, lux=0.0)          # cold -> ON
     apply_decision(seq_tr, heat_1, seq_ctl)
     turn_off = seq_ctl.tick(60000, p, 20.0, lux=0.0)    # warm -> OFF (release)
