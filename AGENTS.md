@@ -332,9 +332,12 @@ Other live-only behaviors (do not "fix" them into regressions):
 - **The CCU3 caps concurrent JSON-RPC sessions.** One `Session.login` per
   test exhausted the pool; every subsequent login failed with `invalid
   credentials or too many sessions` until idle sessions expired (minutes).
-  On-device CCU3 suites must share ONE session for the whole module (create
-  lazily, reuse), and login with backoff. The board's own app sessions count
-  against the same pool.
+  On-device CCU3 suites must share ONE session and login with backoff. The
+  board's own app sessions count against the same pool. The pattern that
+  works (autotests/ccu3_live_session.py): suites import a HELPER module for
+  the pooled session — the runner re-imports test_* modules per run but
+  NOT plain helpers, so the pool survives consecutive runs within one boot;
+  a suite-local collector borrows it via `mine._rpc = await get_rpc()`.
 - **`mpremote fs cp` needs the `:` prefix for remote ABSOLUTE paths**
   (`:...autotest.py :/lib/coresys/autotest.py`); without it mpremote treats
   the target as local and dies with `No such file or directory`. Same for
