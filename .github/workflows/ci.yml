@@ -25,8 +25,6 @@ jobs:
         run: python -m unittest discover -s tests -q
       - name: Run control self-test
         run: PYTHONPATH=app python app/selftest.py
-      - name: Run transport self-test
-        run: PYTHONPATH=app python app/transport/selftest.py
       - name: Run pinned framework tests
         working-directory: micropy-system
         run: python -m unittest discover -s tests -q

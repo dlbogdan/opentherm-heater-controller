@@ -11,7 +11,7 @@ from control.controller import Controller
 from transport.base import ERR_NO_ACK, apply_decision
 from transport.dummy import DummyTransportDrv
 from transport.log import LogTransport
-from transport.selftest import _params
+from selftest import _params
 
 
 class _RejectingDrv(DummyTransportDrv):

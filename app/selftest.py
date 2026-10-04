@@ -7,9 +7,10 @@ Framework-free, so it runs identically on a host (CPython) and on-device
     selftest.run()
 
 It exercises the heat curve, solar accumulator, hysteresis, rate limiter, frost
-clamp, a full end-to-end pipeline, and the control-loop wiring (sensors ->
-controller -> audited transport, including hold/rollback), and returns True
-only if every check passes. No hardware is needed.
+clamp, a full end-to-end pipeline, the control-loop wiring (sensors ->
+controller -> audited transport, including hold/rollback), and the transport
+command sequence (heat -> off+release -> stale-setpoint reset -> heat), and
+returns True only if every check passes. No hardware is needed.
 """
 
 from control.heat_curve import base_flow
@@ -212,10 +213,41 @@ def run():
     d_b = run_control_tick(ctl_skip, logt_skip, st_skip, p, _read_cold, 60000)
     c.ok("loop: unchanged -> skip (no re-write)", d_b.action == "skip")
 
+    # -- Transport command sequence (heat -> off+release -> stale reset -> heat)
+    # Verifies the EXACT ordered API command list, including the release_override
+    # and the one-time stale setpoint reset that the checks above do not cover.
+    from transport.base import apply_decision
+    seq_ctl = Controller(initial_heating_on=False)
+    seq_tr = LogTransport(DummyTransportDrv())
+    heat_1 = seq_ctl.tick(0, p, 10.0, lux=0.0)          # cold -> ON
+    apply_decision(seq_tr, heat_1, seq_ctl)
+    turn_off = seq_ctl.tick(60000, p, 20.0, lux=0.0)    # warm -> OFF (release)
+    apply_decision(seq_tr, turn_off, seq_ctl)
+    seq_ctl.last_sent_flow = 50                          # force a stale setpoint
+    reset_stale = seq_ctl.tick(120000, p, 20.0, lux=0.0)  # OFF + stale -> reset
+    apply_decision(seq_tr, reset_stale, seq_ctl)
+    heat_2 = seq_ctl.tick(180000, p, 10.0, lux=0.0)      # cold -> ON
+    apply_decision(seq_tr, heat_2, seq_ctl)
+    expected_seq = [
+        ("set_heating", True),
+        ("set_flow_target", heat_1.target),
+        ("set_heating", False),
+        ("release_override",),
+        ("set_flow_target", p["off_sentinel"]),
+        ("set_heating", True),
+        ("set_flow_target", heat_2.target),
+    ]
+    c.ok("seq: exact command sequence (release + stale reset)",
+         seq_tr.commands == expected_seq)
+
     print("\n%d checks, %d failed" % (c.total, c.failed))
     return c.failed == 0
 
 
 if __name__ == "__main__":
+    import sys
     ok = run()
     print("control core self-test:", "OK" if ok else "FAILED")
+    # Exit non-zero on failure so a CLI/CI invocation actually gates; the
+    # on-device path calls run() directly and is unaffected by this.
+    sys.exit(0 if ok else 1)
