@@ -27,6 +27,13 @@ class BoilerTransport:
         raise NotImplementedError
 
     def set_flow_target(self, temp_c):
+        """Write the control setpoint.
+
+        The app only sends values it intends to hold (>= 8 degC on OTGW,
+        re-asserted on the sub-minute cadence); "off" is expressed as a
+        sub-8 value -- the app's ``off_sentinel``, default 0.0 = "external
+        control off". See the OTGW section of AGENTS.md.
+        """
         raise NotImplementedError
 
     def release_override(self):

@@ -32,7 +32,7 @@ def _params():
         "solar_charge": 0.15, "solar_halflife": 25, "lux_mult": 1.0,
         "demand_neutral": 3, "demand_rate": 0.1, "demand_exponent": 1.0,
         "demand_max_p_offset": 10,
-        "min_change": 2, "off_sentinel": 20.0,
+        "min_change": 2, "off_sentinel": 0.0,
     }
 
 
@@ -119,7 +119,7 @@ def run():
     c.ok("rl: OFF + stale setpoint -> reset",
          should_update(False, False, 20, 40, p["min_change"], p["off_sentinel"]) is True)
     c.ok("rl: OFF + already sentinel -> skip",
-         should_update(False, False, 20, 20, p["min_change"], p["off_sentinel"]) is False)
+         should_update(False, False, 0, 0, p["min_change"], p["off_sentinel"]) is False)
 
     # -- Frost clamp ----------------------------------------------------------
     c.ok("frost: lifts sent flow when very cold",

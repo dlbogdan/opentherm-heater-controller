@@ -89,6 +89,25 @@ class ConfigValidationTests(unittest.TestCase):
                     "solar_halflife", "net_port", "control_tick_s"):
             self.assertEqual(values[key], self.module.DEFAULTS[key])
 
+    def test_off_sentinel_at_or_above_8_is_repaired(self):
+        # AGENTS.md OTGW rule: a CS >= 8 degC is an ACTIVE setpoint (heats
+        # the boiler, needs per-minute re-assert). A board that persisted
+        # the old 20.0 default must self-heal at boot.
+        self.set_value("off_sentinel", 20.0)
+        problems = self.config.validate()
+        self.assertIn("off_sentinel must be >= 0 and < 8 (OTGW: CS >= 8 is "
+                      "an active, per-minute-re-asserted setpoint)", problems)
+        self.assertEqual(self.config.get("off_sentinel"),
+                         self.module.DEFAULTS["off_sentinel"])
+        self.assertEqual(self.config.get("off_sentinel"), 0.0)
+
+    def test_off_sentinel_below_8_is_accepted(self):
+        # Sub-8 is the OTGW "safe" band: no vigilance obligation, so a
+        # user-chosen value there is preserved, not reset.
+        self.set_value("off_sentinel", 5.0)
+        self.assertEqual(self.config.validate(), [])
+        self.assertEqual(self.config.get("off_sentinel"), 5.0)
+
     def test_cross_key_validation_repeats_until_result_is_consistent(self):
         # The first t_design/t_on repair changes t_on to 13, exposing a new
         # t_on/t_off violation because t_off was also 13.

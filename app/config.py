@@ -59,7 +59,14 @@ DEFAULTS = {
     "control_tick_s": 60,
     # Transport
     "transport": "otgw",          # "otgw" | "direct_ot"
-    "off_sentinel": 20.0,
+    # The "off" setpoint the rate limiter resets a stale setpoint to.
+    # MUST be < 8 degC: per the OTGW vigilance rule (AGENTS.md, OTGW
+    # section) a CS >= 8 is an ACTIVE setpoint -- it heats the boiler AND
+    # must be re-asserted every minute. 0.0 = "external control off" (the
+    # gateway also clears CHenable), the same end state as
+    # release_override. Any persisted value >= 8 is rejected and repaired
+    # at boot. (Supersedes the blueprint's 20 -- see AGENTS.md.)
+    "off_sentinel": 0.0,
     # OTGW re-assert cadence (seconds): a CS >= 8 degC must be re-asserted at
     # least every minute (AGENTS.md, OTGW section), so this stays sub-minute
     # (default 30 s = 2x margin). Ignored by "direct_ot" (no obligation).
@@ -206,6 +213,9 @@ class Config:
              "demand_max_p_offset must be >= 0"),
             ("min_change", v["min_change"] >= 0,
              "min_change must be >= 0"),
+            ("off_sentinel", 0 <= v["off_sentinel"] < 8,
+             "off_sentinel must be >= 0 and < 8 (OTGW: CS >= 8 is an "
+             "active, per-minute-re-asserted setpoint)"),
             ("control_tick_s", v["control_tick_s"] >= 5,
              "control_tick_s must be >= 5"),
             ("cs_reassert_s", v["cs_reassert_s"] >= 5

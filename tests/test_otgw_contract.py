@@ -3,10 +3,11 @@
 test_otgw_reassert.py owns the re-assert timing rule; test_transport_retry
 owns rollback. This suite owns the WIRE CONTRACT the future real drivers
 must implement identically: which commands each decision produces, in what
-order, with what values, and how the audit ring decodes them. It also
-CHARACTERIZES the two known AGENTS.md hazards (off_sentinel >= 8; the CS
-read-back being the only "held?" check) so a real driver or an off-mapping
-fix cannot pass silently -- updating these pins must be a deliberate act.
+order, with what values, and how the audit ring decodes them. It pins the
+RESOLVED off-sentinel contract (AGENTS.md hazard #2: the off setpoint-reset
+must land a sub-8 CS -- never an active held setpoint) and the CS read-back
+being the only "held?" check, so a real driver cannot regress them
+silently.
 
 All fresh dummies; the live board is never actuated here.
 """
@@ -165,21 +166,23 @@ class HeldSetpointReadbackTests(unittest.TestCase):
         self.assertIs(ch[0]["value"], True)
 
 
-class OffSentinelHazardCharacterizationTests(unittest.TestCase):
-    """CHARACTERIZATION PINS of AGENTS.md hazard #2 (off_sentinel >= 8).
+class OffSentinelContractTests(unittest.TestCase):
+    """OFF semantics on the wire (AGENTS.md hazard #2 -- RESOLVED).
 
-    Today the OFF setpoint-reset path sends CS=20 -> the OTGW dummy treats
-    it as an ACTIVE held setpoint: re-asserted forever, and (with expiry
-    simulated) only the re-assert keeps it. A real OTGWTransportDrv MUST
-    translate the sentinel to CS<8/CS=0; when that fix lands, these pins
-    are EXPECTED to fail and must be updated deliberately, not deleted.
+    The off setpoint-reset path used to send CS=20: an ACTIVE (>= 8 degC)
+    held setpoint -- re-asserted forever, vigilance traffic for a boiler
+    that is supposed to be OFF. The fix: off_sentinel is 0.0 (config
+    validates < 8 and repairs any persisted >= 8 value at boot), so the
+    reset path writes CS=0 -- the same "nothing active" end state as the
+    release path. These pins lock the fixed contract; a real
+    OTGWTransportDrv must reproduce it exactly.
     """
 
     def _warm_tick(self, transport, ctl, state, now):
         return run_control_tick(ctl, transport, state, _params(),
                                 lambda: (20.0, 0.0, None), now)
 
-    def test_off_reset_leaves_active_cs_held_and_reasserted(self):
+    def test_off_reset_is_sub8_and_never_reasserted(self):
         clock = _Clock()
         transport = LogTransport(DummyOTGW(simulate_expiry=True, expiry_s=60,
                                            clock=clock.now))
@@ -189,24 +192,22 @@ class OffSentinelHazardCharacterizationTests(unittest.TestCase):
         d = self._warm_tick(transport, ctl, state, clock.ms)
         self.assertEqual((d.action, d.release_override), ("off", False))
         self.assertEqual(d.target, _params()["off_sentinel"])
-        # The dummy now holds an ACTIVE 20 degC CS...
-        self.assertEqual(transport.read_setpoint(), 20.0)
-        # ...and keeps re-asserting it an hour later (vigilance traffic
-        # for a boiler that is supposed to be OFF).
+        self.assertLess(d.target, 8.0)  # the OTGW "safe" boundary
+        # Wire: a single CS=0 -- nothing active, nothing to hold.
+        self.assertEqual(_otgw_events(transport), [("CS", 0.0)])
+        self.assertEqual(transport.read_setpoint(), 0.0)
+        # An hour later: zero re-assert traffic (sub-8 needs no vigilance).
         clock.advance(3600 * 1000)
         transport.tick(clock.now())
-        self.assertEqual(transport.read_setpoint(), 20.0)
-        held = [e for e in transport.recent_events(64)
-                if e["kind"] == "otgw_command"
-                and e.get("command") == "CS" and e.get("value") == 20.0]
-        self.assertGreaterEqual(len(held), 2)  # initial set + at least one
-        # re-assert: the "off" boiler is generating per-minute CS=20 traffic.
+        cs = [e for e in transport.recent_events(64)
+              if e["kind"] == "otgw_command" and e.get("command") == "CS"]
+        self.assertEqual(len(cs), 1)  # only the initial reset, no re-assert
+        self.assertEqual(transport.read_setpoint(), 0.0)
 
     def test_off_release_path_is_the_clean_one(self):
-        # The release-override OFF (mode change) has NO such hazard: it
-        # ends with CS=0 + CH=0 and nothing held. The contrast is the
-        # point: whatever the sentinel fix is, it must make the reset
-        # path look like this one on the wire.
+        # The release-override OFF (mode change) was always clean: it ends
+        # with CS=0 + CH=0 and nothing held. The reset path now matches it
+        # on the wire -- the contrast the hazard pins used to draw.
         transport = LogTransport(DummyOTGW(simulate_expiry=True))
         ctl = Controller(initial_heating_on=True)
         ctl.last_sent_flow = 45

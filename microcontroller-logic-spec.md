@@ -140,7 +140,7 @@ All parameters must be user-configurable (stored in non-volatile memory / flash 
 | Parameter | Key | Default | Range | Unit | Description |
 |-----------|-----|---------|-------|------|-------------|
 | Transport Mode | `transport` | `otgw` | `otgw` \| `direct_ot` | — | Which `BoilerTransport` implementation to use |
-| Off Sentinel | `off_sentinel` | 20.0 | — | °C | Setpoint value that means "off" (matches the blueprint's `20` and the OTGW `> 20` check) |
+| Off Sentinel | `off_sentinel` | 0.0 | 0..<8 | °C | Setpoint value that means "off". MUST be < 8: per the OTGW vigilance rule a CS >= 8 is an *active* setpoint (heats + needs per-minute re-assert). 0 = "external control off" (gateway clears CHenable). Supersedes the blueprint's 20 — see AGENTS.md, OTGW section |
 
 ---
 

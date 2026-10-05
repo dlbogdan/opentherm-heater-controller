@@ -1,6 +1,6 @@
 {
   "CONTROL": {
-    "off_sentinel": 20.0,
+    "off_sentinel": 0.0,
     "net_enabled": true,
     "curve_base": 25,
     "ccu3_weather_type": "HmIP-SWO",

@@ -486,10 +486,15 @@ Consequences for this codebase (do not "fix" them away):
   jitter (a slow CCU3 read, event-loop load) loses the setpoint. Use a dedicated
   re-assert cadence of **~30 s** (2x safety margin), **decoupled from the
   control tick** (the tick may run slower to recompute the target).
-- **`off_sentinel = 20.0` is >= 8 degC -- wrong for "off".** 20 degC is an
-  *active* setpoint (heats the boiler to 20 degC AND would require per-minute
-  re-assert). "Off" must map to **CS = 0 (or < 8) + CHenable = 0**, not CS = 20.
-  Revisit this when building the driver.
+- **`off_sentinel` is 0.0 -- RESOLVED (was 20.0).** 20 degC is an *active*
+  setpoint (heats the boiler to 20 degC AND requires per-minute re-assert).
+  "Off" maps to **CS = 0 (or < 8) + CHenable = 0**. The app now defaults
+  `off_sentinel` to 0.0 ("external control off": CS=0 also clears CHenable)
+  and `config.validate()` REJECTS any persisted value >= 8, repairing it to
+  0.0 at boot. The off setpoint-reset path therefore lands CS=0 -- the same
+  end state as `release_override`. Pinned by
+  `tests/test_otgw_contract.OffSentinelContractTests`. The real driver must
+  keep it: **never write a CS >= 8 for "off"**.
 
 **The CS / CH mapping (on/off):**
 - **`CS=<temp>`** -- the control setpoint OTGW sends in MsgID 1. A non-zero CS

@@ -35,7 +35,7 @@ def params(**overrides):
         "demand_enabled": True,
         "demand_neutral": 3, "demand_rate": 0.1, "demand_exponent": 1.0,
         "demand_max_p_offset": 10,
-        "min_change": 2, "off_sentinel": 20.0,
+        "min_change": 2, "off_sentinel": 0.0,
     }
     p.update(overrides)
     return p

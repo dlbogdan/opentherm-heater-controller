@@ -105,9 +105,10 @@ failsafe behavior and the display; it never inspects transport internals.
     project, `relinquish_control()` in
     `OT-PID-UI-PICO/lib/controllers/controller_otgw.py`): send `CS=0`,
     then `CH=0`. The `set_flow_target(off_sentinel)` write in
-    §7.7 still happens — that is what the
-    [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:7) `> 20`
-    check keys on — and both mechanisms coexist.
+    §7.7 still happens — with `off_sentinel = 0.0` it lands `CS=0` too,
+    i.e. the same "nothing held" end state (the blueprint's `> 20` check
+    in [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:7) is
+    legacy reference only).
 - **`tick(now)`** → every **30 s**, if `heating_on` and the last submitted
   target is above the off sentinel, **re-send** the control setpoint. This is
   the behavior of [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:3).
@@ -415,7 +416,7 @@ DEFAULTS = {
     "min_change": 2,
     # Transport
     "transport": "otgw",          # "otgw" | "direct_ot"
-    "off_sentinel": 20.0,         # °C value that means "off" (matches blueprint)
+    "off_sentinel": 0.0,          # °C value that means "off"; must be < 8 (OTGW active-setpoint rule; supersedes the blueprint's 20)
     # Sensor sources (§3.5)
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"
     "lux_source": "auto",
@@ -618,11 +619,15 @@ else:
 
 ### 8.1 Off sentinel
 
-`off_sentinel = 20.0 °C` is the value that means "off" (matches the blueprint,
-which writes `20` to the number entity when heating is off, and the OTGW
-automation's `> 20` check in [`maintain-otgw-setpoint.yaml:7`](maintain-otgw-setpoint.yaml:7)).
-The firmware should use the explicit `heating_on` state as the primary mode
-flag; the 20 °C test is a secondary compatibility safeguard.
+`off_sentinel = 0.0 °C` is the value that means "off". It **must be < 8 °C**:
+per the OTGW vigilance rule (AGENTS.md, OTGW section) a control setpoint of
+>= 8 degC is an *active* setpoint -- it heats the boiler and must be
+re-asserted every minute. 0.0 is the documented "external control off" value
+(the gateway also clears CHenable). The config validator rejects and repairs
+any persisted value >= 8 at boot. This supersedes the blueprint's `20`
+(the [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:7) `> 20`
+check is legacy reference only). The firmware uses the explicit `heating_on`
+state as the primary mode flag.
 
 ### 8.2 Immediate writes
 
@@ -634,8 +639,9 @@ flag; the 20 °C test is a secondary compatibility safeguard.
 
 In OTGW mode, the override is volatile and is cleared when the original
 thermostat writes its own setpoint. The transport therefore **re-sends** the
-current control setpoint every **30 s** while `heating_on` and
-`last_sent_flow > off_sentinel`. This is the behavior of
+current control setpoint every **30 s** while a held setpoint is **>= 8 °C**
+(the OTGW active-setpoint rule; a sub-8 value -- including the off sentinel --
+needs no vigilance re-assert). This is the behavior of
 [`maintain-otgw-setpoint.yaml`](maintain-otgw-setpoint.yaml:3).
 
 This refresh is **independent** of the §7.6 rate limiter and does **not**
@@ -707,7 +713,7 @@ nothing else needs to survive a power cycle.
     "demand_neutral": 3, "demand_rate": 0.1, "demand_exponent": 1.0,
     "demand_max_p_offset": 10,
     "min_change": 2,
-    "transport": "otgw", "off_sentinel": 20.0
+    "transport": "otgw", "off_sentinel": 0.0
 }
 ```
 
