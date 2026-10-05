@@ -92,9 +92,9 @@ loop reads ``t_out`` and ``lux`` from the Homematic CCU3 weather station
 to ``/ccu3_cache.json``, then ``Interface.getValue`` per poll). A failed
 poll keeps the last value; a value older than 10 min is dropped, which is
 the controller's defined failsafe input (no fresh ``t_out`` -> fixed safe
-flow). Without a reachable CCU3 (or with ``t_out_source: null``) the null
-source runs instead -- same failsafe semantics, so the board degrades
-safely either way.
+flow). Without a reachable CCU3 (or with an empty ``ccu3_url`` — ``auto``
+falls back to the null source) the null source runs instead -- same failsafe
+semantics, so the board degrades safely either way.
 
 Against the dummy driver this means a healthy board *does* show control
 activity: ``transport status`` reports heating on (45 °C failsafe flow

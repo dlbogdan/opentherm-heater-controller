@@ -101,8 +101,10 @@ shell. The app is never interrupted, so no final reset is needed. `--usb`
 keeps the legacy mpremote path and performs the required final reset after
 its USB self-test. Once it prints `DEPLOY OK`, validate over the shell only.
 
-Commit after each logical, device-verified step. Do not include unrelated
-working-tree changes (e.g. `app/version.txt` after a deploy auto-bump).
+Commit after each logical, device-verified step. Commit `app/version.txt`
+together with the deploy it represents: HEAD's version file must never lag
+the board's running firmware (the deploy auto-bump is part of the step, not
+unrelated noise).
 
 ## OTA update source (`update-source.json`)
 
@@ -242,6 +244,18 @@ Verified on the installed MicroPython 1.29.0 build:
   loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
   the total free looks sufficient (fragmentation). `gc.collect()` before a
   large read/parse, and **stream** large payloads instead of accumulating them.
+- **All elapsed-time arithmetic goes through signed uint32 tick diffs, never
+  raw `ticks_ms()` subtraction.** Use `time.ticks_diff` or the app's
+  `control.util.elapsed_ms` (same semantics; clamp where a negative elapsed
+  is impossible). The 32-bit tick counter wraps (~49.7 days of uptime) and a
+  raw subtraction flips sign at the wrap -- silently disabling poll intervals
+  and staleness guards. Episode 2026-10-05: fixed in `556b9df`; pinned by
+  `tests/test_time_wrap.py`.
+- **`/log.txt` timestamps are not wall-clock time.** The rp2 clock has no
+  RTC/NTP: each line's leading number is an epoch-style value starting at
+  ~1609459200 (2021-01-01 00:00 UTC) plus uptime seconds. Use `status`'s
+  `uptime_s` for elapsed time; log timestamps only order events relative to
+  each other.
 - **A same-named directory shadows a same-named module — even when empty.**
   If `sensors/` and `sensors.py` both exist in one directory on the device,
   `import sensors` resolves to the *directory* (a package), and
@@ -549,6 +563,13 @@ Consequences for this codebase (do not "fix" them away):
   (`rooms_poll_s`) and caches the aggregate; the control loop reads the cached
   demand; `rooms` returns the cache. Verified on-device: selftest 33/33, rooms
   demand 4.29%, weather live, no ENOMEM, no event-loop stall.
+- Review-fix milestones (firmware 1.1.67-1.1.69): wrap-safe time arithmetic
+  `556b9df` (1.1.67; selftest 34/34 + live actuation probe); off-sentinel
+  OTGW contract `97217fc` (1.1.68; `off_sentinel` 0.0 + validate-repair --
+  a board-persisted 20.0 self-healed live, visible in `/log.txt`);
+  `transport demo` safety gate `dccc319` (1.1.69; demo still runs on the
+  dummy, the contract refuses real drivers before any write). Host suite
+  118 green throughout.
 
 See `pico-standalone-architecture.md` for the target architecture and the
 current implementation plan in repository/session memory when available.

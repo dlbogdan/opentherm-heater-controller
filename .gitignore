@@ -16,3 +16,4 @@ app-config.json
 .otc-device-ip
 .micropy-device-ip
 .cache/
+*.code-workspace
