@@ -2,13 +2,15 @@
 
 A first-order ODE: the accumulator charges toward a sun-driven equilibrium and
 decays with a temperature-scaled half-life. The timestep is capped at 30 min so a
-long gap (sleep/crash/boot) cannot produce an absurd jump.
+long gap (sleep/crash/boot) cannot produce an absurd jump, and it is clamped at
+zero: elapsed time is computed wrap-safely (``control.util.elapsed_ms``), and a
+negative dt (a clock anomaly) must never turn the decay factor into growth.
 
 ``lux`` is the *effective* lux reading (the ``lux_mult`` calibration is applied at
 the sensor-source layer, Step 6) so the math here matches §7.2 exactly.
 """
 
-from control.util import clamp
+from control.util import clamp, elapsed_ms
 
 _LN2 = 0.693147
 _DT_CAP_MIN = 30.0
@@ -34,7 +36,8 @@ def solar_step(solar_accum, t_out, lux, now_ms, last_solar_ts, params):
     if last_solar_ts is None:
         dt_minutes = 0.0
     else:
-        dt_minutes = min((now_ms - last_solar_ts) / 60000.0, _DT_CAP_MIN)
+        dt_minutes = min(max(elapsed_ms(last_solar_ts, now_ms), 0) / 60000.0,
+                         _DT_CAP_MIN)
 
     decay = 2.0 ** (-k * dt_minutes / _LN2)
     new_accum = a_eq + (solar_accum - a_eq) * decay

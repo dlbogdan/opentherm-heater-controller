@@ -161,6 +161,47 @@ class Ccu3SourceTests(unittest.TestCase):
                            ccu3._now_ms() - 700_000)  # > 600 s limit
         self.assertEqual(run(failing.read()), (None, None, None))
 
+    # -- ticks_ms wrap (2**32 ms ~ 49.7 days uptime) --------------------------
+    # The stamps below straddle the wrap: the value was recorded just BEFORE
+    # ticks_ms rolls over, the read happens just AFTER it. Raw subtraction
+    # would go hugely negative -- no poll, no staleness, a frozen reading for
+    # a whole wrap cycle. _diff_ms must restore the true elapsed time.
+
+    WRAP = 2 ** 32
+
+    def patch_now(self, ms):
+        import ccu3
+        real = ccu3._now_ms
+        ccu3._now_ms = lambda: ms
+        self.addCleanup(setattr, ccu3, "_now_ms", real)
+
+    def test_fresh_across_the_wrap_is_not_repolled(self):
+        fake = FakeCcu3()
+        source = self.make(fake)
+        source._endpoint = ("HmIPRf", "BBB")
+        source._values = (8.5, 12000.0, self.WRAP - 10_000)  # 10 s pre-wrap
+        self.patch_now(5_000)  # 5 s post-wrap -> true age 15 s (< poll 60 s)
+        self.assertEqual(run(source.read()), (8.5, 12000.0, None))
+        self.assertNotIn("Interface.getValue", fake.methods)
+
+    def test_poll_fires_across_the_wrap_when_interval_elapsed(self):
+        fake = FakeCcu3()
+        source = self.make(fake)
+        source._endpoint = ("HmIPRf", "BBB")
+        source._values = (1.0, 200.0, self.WRAP - 100_000)  # 100 s pre-wrap
+        self.patch_now(5_000)  # true age 105 s > poll 60 s -> must re-poll
+        self.assertEqual(run(source.read()), (8.5, 12000.0, None))
+        self.assertIn("Interface.getValue", fake.methods)
+
+    def test_stale_limit_triggers_across_the_wrap(self):
+        failing = Ccu3SensorSource(
+            FakeConfig(), cache_path=self.cache, http_post=fail_post,
+            sleep=lambda _s: None)
+        failing._endpoint = ("HmIPRf", "BBB")
+        failing._values = (8.5, 12000.0, self.WRAP - 700_000)  # 700 s pre-wrap
+        self.patch_now(5_000)  # true age 705 s > 600 s limit -> must drop
+        self.assertEqual(run(failing.read()), (None, None, None))
+
 
 class MakeSourceTests(unittest.TestCase):
     def test_auto_with_url_selects_ccu3(self):

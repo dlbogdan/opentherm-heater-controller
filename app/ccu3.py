@@ -48,6 +48,22 @@ def _now_ms():
         return int(time.monotonic() * 1000)
 
 
+def _diff_ms(newer_ms, older_ms):
+    """Wrap-safe elapsed ms between two ``_now_ms`` stamps.
+
+    ``ticks_ms`` wraps at 2**32 ms (~49.7 days of uptime). Raw subtraction
+    goes negative across the wrap, which would silently stop the poll
+    interval AND disable the staleness failsafe for a whole wrap cycle --
+    the controller would steer on a frozen reading. Same uint32 signed-diff
+    semantics as MicroPython's ``time.ticks_diff`` (correct for intervals
+    under 2**31 ms, far beyond the poll/staleness windows used here).
+    """
+    diff = (int(newer_ms) - int(older_ms)) & 0xFFFFFFFF
+    if diff > 0x7FFFFFFF:
+        diff -= 0x100000000
+    return diff
+
+
 def _parse_url(url):
     """scheme://host[:port]/path -> (host, port, path)."""
     _scheme, _sep, rest = url.partition("://")
@@ -226,12 +242,12 @@ class Ccu3SensorSource:
     async def read(self):
         now = _now_ms()
         poll_ms = int(self._config.get("ccu3_poll_s")) * 1000
-        if self._values is None or now - self._values[2] >= poll_ms:
+        if self._values is None or _diff_ms(now, self._values[2]) >= poll_ms:
             await self._poll(now)
         if self._values is None:
             return (None, None, None)
         t_out, lux, ts = self._values
-        if now - ts > self.STALE_LIMIT_S * 1000:
+        if _diff_ms(now, ts) > self.STALE_LIMIT_S * 1000:
             self._values = None  # too old to trust: let the controller failsafe
             if self._warn:
                 self._warn("CCU3: last value too stale; reporting no reading")
