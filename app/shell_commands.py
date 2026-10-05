@@ -73,7 +73,12 @@ def verify_raw(path):
 
 
 def _run_demo(transport):
-    """Exercise the whole pipeline: success, coalescing, and failure."""
+    """Exercise the whole pipeline: success, coalescing, and failure.
+
+    ACTUATES the transport -- the caller must have checked the driver's
+    ``demo_safe`` flag (only the debug dummies set it; a real driver must
+    never, so a diagnostic can never drive a real boiler).
+    """
     transport.set_heating(True)
     transport.set_flow_target(45.5)
     # Heartbeat-style burst: three identical OpenTherm frames must coalesce
@@ -124,6 +129,10 @@ def make_transport_handler(transport):
         if command == "demo":
             if len(parts) > 1:
                 return USAGE
+            if not getattr(transport.driver, "demo_safe", False):
+                return ("demo refused: %s drives real hardware "
+                        "(demo would actuate the boiler)"
+                        % type(transport.driver).__name__)
             count = _run_demo(transport)
             return "OK: demo sequence recorded (%d events)" % count
 

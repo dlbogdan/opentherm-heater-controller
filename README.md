@@ -68,10 +68,13 @@ python micropy-system/tools/target/telnet.py DEVICE_IP transport save raw       
 
 `demo` exercises the whole recording pipeline in one shot: a normal command
 sequence, a repeated-frame burst (verifying coalescing), and an injected
-no-ack failure (verifying error records). `save`/`verify` are opt-in only
-(atomic top-level-file writes, never automatic) and exist to preserve and
-check a snapshot across a reboot or network loss; day-to-day inspection uses
-`transport commands`.
+no-ack failure (verifying error records). `demo` **actuates the transport**,
+so it is gated by the driver's `demo_safe` flag: the debug dummies set it,
+every real driver keeps the `BoilerTransport` default (`False`) and the shell
+refuses (`demo refused: <driver> drives real hardware`). `save`/`verify` are
+opt-in only (atomic top-level-file writes, never automatic) and exist to
+preserve and check a snapshot across a reboot or network loss; day-to-day
+inspection uses `transport commands`.
 
 ## Control loop
 

@@ -11,6 +11,7 @@ if str(APP) not in sys.path:
 
 from shell_commands import (make_transport_handler, register_transport_commands,
                             verify_json, verify_raw)
+from transport.base import BoilerTransport
 from transport.dummy_otgw import DummyOTGW
 from transport.log import LogTransport
 
@@ -26,6 +27,33 @@ class _Shell:
 def _make(capacity=64):
     driver = DummyOTGW()
     return driver, LogTransport(driver, capacity=capacity)
+
+
+class _RealDrv(BoilerTransport):
+    """Stands in for a future OTGWTransportDrv: contract default
+    demo_safe=False, wired to real hardware -- every write would drive
+    the boiler, so any call proves the gate failed."""
+
+    def set_heating(self, on):
+        raise AssertionError("real driver must not be actuated by demo")
+
+    def set_flow_target(self, temp_c):
+        raise AssertionError("real driver must not be actuated by demo")
+
+    def release_override(self):
+        raise AssertionError("real driver must not be actuated by demo")
+
+    def read_flow_temp(self):
+        return None  # read-only status probes: fine for the shell
+
+    def read_return_temp(self):
+        return None
+
+    def read_modulation(self):
+        return None
+
+    def health(self):
+        return "ok"
 
 
 class LogTransportShellTests(unittest.TestCase):
@@ -85,6 +113,7 @@ class LogTransportShellTests(unittest.TestCase):
 
     def test_demo_records_full_pipeline(self):
         driver, transport = _make()
+        self.assertTrue(driver.demo_safe)  # dummies are the safe exception
         handler = make_transport_handler(transport)
         response = handler("demo")
         self.assertIn("demo sequence", response)
@@ -113,6 +142,20 @@ class LogTransportShellTests(unittest.TestCase):
         self.assertIn("no_ack", [entry.get("error") for entry in errors])
         self.assertTrue(all(entry["result"] in ("rejected", "exception")
                             for entry in errors))
+
+    def test_demo_refused_on_real_hardware_drivers(self):
+        # The gate: a driver without demo_safe (the BoilerTransport contract
+        # default -- every real driver) must be refused BEFORE any write,
+        # and nothing may be actuated or recorded.
+        transport = LogTransport(_RealDrv())
+        handler = make_transport_handler(transport)
+        response = handler("demo")
+        self.assertTrue(response.startswith("demo refused"), response)
+        self.assertIn("_RealDrv", response)
+        self.assertEqual(handler("commands"), "(no transport events)")
+        # status/verify/clear remain available -- only demo is gated.
+        self.assertEqual(json.loads(handler("status"))["driver"], "_RealDrv")
+        self.assertEqual(handler("clear"), "OK: transport ring cleared")
 
     def test_explicit_snapshots(self):
         driver, transport = _make()

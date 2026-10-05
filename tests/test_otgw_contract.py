@@ -222,6 +222,19 @@ class OffSentinelContractTests(unittest.TestCase):
         self.assertIsNone(transport.read_setpoint())
 
 
+class DemoSafetyGateContractTests(unittest.TestCase):
+    """``transport demo`` actuates -- only dummies may run it."""
+
+    def test_contract_default_is_not_demo_safe(self):
+        from transport.base import BoilerTransport
+        self.assertFalse(BoilerTransport.demo_safe)
+        self.assertFalse(BoilerTransport().demo_safe)
+
+    def test_dummies_are_demo_safe(self):
+        self.assertTrue(DummyOTGW().demo_safe)
+        self.assertTrue(DummyDirectOT().demo_safe)
+
+
 class TickCoexistenceTests(unittest.TestCase):
     """control_loop tick + the re-assert task both call transport.tick()."""
 

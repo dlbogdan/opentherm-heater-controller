@@ -13,6 +13,9 @@ from transport.base import (BoilerTransport, ERR_NO_ACK, TransportHealth)
 class DummyTransportBase(BoilerTransport):
     """Common state + test/observation hooks for the dummy drivers."""
 
+    # Simulated boiler: safe for the shell's actuating ``transport demo``.
+    demo_safe = True
+
     def __init__(self, fail_next=False):
         self._heating = False
         self._setpoint = None

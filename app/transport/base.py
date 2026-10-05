@@ -19,6 +19,13 @@ class TransportHealth:
 class BoilerTransport:
     """Interface implemented by OTGW, direct-OT, and test transports."""
 
+    # Demo safety gate (shell ``transport demo``): the demo ACTUATES the
+    # transport end-to-end (heat -> burst -> injected failure -> off).
+    # Only debug dummies may run it; a driver wired to real hardware must
+    # keep the contract default False so a diagnostic command can never
+    # drive a real boiler. See app/shell_commands.py.
+    demo_safe = False
+
     def last_error_code(self):
         """Most recent bounded driver error code (ERR_NONE when healthy)."""
         return ERR_NONE
