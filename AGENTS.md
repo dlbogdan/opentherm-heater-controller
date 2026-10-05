@@ -459,6 +459,19 @@ MicroPython per-connection overhead; the CCU3 sends no `Content-Length`, so
 the body is read until the server closes). A full 8-room `rooms` pass is ~47s
 of I/O.
 
+**Production calibration (live board values, 2026-10-05):** the board's
+persisted `/app-config.json` (and the local provisioning `app-config.json`)
+deliberately differs from `app/config.py` DEFAULTS -- it mirrors the tuned
+Home Assistant blueprint automation that drives the boiler today:
+`t_design -30, t_on 19, t_off 23, lux_mult 1.4, min_change 1,
+demand_neutral 0, demand_rate 3.8, demand_exponent 0.35`. HA's demand input
+was a CCU3 ReGaHk script (`heating-demand-calculation.ccu3script`, committed
+at the repo root as provenance) whose recipe the firmware now reproduces 1:1
+in `heating_groups.py`; the script is to be deleted from the CCU3 once the
+board takes over actuation. Do not "fix" the board's config back to the
+shipped defaults -- the shipped defaults are the blueprint's documented
+defaults, not the house's calibration.
+
 The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
 `asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so
 a read **yields the event loop** instead of stalling the board (mirrors the

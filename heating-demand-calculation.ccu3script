@@ -1,0 +1,172 @@
+! PROVENANCE (committed 2026-10-05): this is the production CCU3 ReGaHk
+! script that Home Assistant's heating_demand_sensor reads today (system
+! variables Heating.demand.out.pct / .avg / .max / .max.room). The Pico
+! firmware reimplements this recipe 1:1 in app/heating_groups.py
+! (demand_pct = total_delta / ALL_thermostats / delta_cap(3) * 100, clamped
+! 0..100; skip rule 5 < setpoint < 30 && setpoint > actual). It is kept
+! here as the historical reference until the script is deleted from the
+! CCU3 and the standalone board takes over demand.
+!
+! Calculate the delta between setpoint and actual temperature
+! for all heating groups (HEATING_CLIMATECONTROL_TRANSCEIVER channels)
+
+boolean debug = true;
+
+string deviceid;
+string channelid;
+
+integer groupcount = 0;
+real total_delta = 0.00;
+real max_delta = 0.00;
+string max_delta_name = "";
+integer thermostats_count = 0;
+
+! Iterate over all devices
+foreach (deviceid, dom.GetObject(ID_DEVICES).EnumUsedIDs()) {
+    var device = dom.GetObject(deviceid);
+
+    if (device.HssType().StartsWith("HmIP-WTH") || device.HssType().StartsWith("HmIP-STHD") || device.HssType().StartsWith("HmIP-STH")) {
+
+        foreach (channelid, device.Channels().EnumUsedIDs()) {
+            var channel = dom.GetObject(channelid);
+
+            if (channel.HssType() == "HEATING_CLIMATECONTROL_TRANSCEIVER") {
+
+                var interface = dom.GetObject(channel.Interface());
+                var datapoint = interface # "." # channel.Address();
+
+                ! Read setpoint and actual temperature
+                real setpoint = dom.GetObject(datapoint # ".SET_POINT_TEMPERATURE").Value();
+                real actual   = dom.GetObject(datapoint # ".ACTUAL_TEMPERATURE").Value();
+                thermostats_count = thermostats_count + 1;
+                ! Skip if setpoint is extreme (e.g. OFF=5 or ON=30)
+                if ((setpoint > 5) && (setpoint < 30) && (setpoint > actual)) {
+                    real delta = setpoint - actual;
+
+                    groupcount = groupcount + 1;
+                    total_delta = total_delta + delta;
+
+                    ! Track the room with the highest demand
+                    if (delta > max_delta) {
+                        max_delta = delta;
+                        max_delta_name = device.Name();
+                    }
+
+                    if (debug) {
+                        WriteLine(device.Name() # " | Setpoint: " # setpoint # " | Actual: " # actual # " | Delta: " # delta);
+                    }
+                }
+            }
+        }
+    }
+}
+
+! Compute average delta across demanding groups only
+real avg_delta = 0.0;
+if (groupcount > 0) {
+    avg_delta = total_delta / groupcount;
+}
+
+! Compute heating demand [0..100]
+! Global avg delta = total_delta / ALL thermostats (not just demanding ones)
+! This naturally weighs both how many rooms need heat and how much they need.
+! delta_cap = the delta (°C) at which demand saturates to 100%.
+real delta_cap = 3;
+real heating_demand = 0.0;
+if (thermostats_count > 0) {
+    real global_avg_delta = total_delta / thermostats_count;
+    heating_demand = (global_avg_delta / delta_cap) * 100;
+    ! Clamp to [0..100]
+    if (heating_demand > 100) { heating_demand = 100.0; }
+    if (heating_demand < 0)   { heating_demand = 0.0; }
+}
+
+if (debug) {
+    WriteLine("-------------------------------");
+    WriteLine("Groups counted: " # groupcount);
+    WriteLine("Thermostats total: " # thermostats_count);
+    WriteLine("Total delta sum: " # total_delta);
+    WriteLine("Average delta (demanding): " # avg_delta);
+    WriteLine("Global avg delta: " # (total_delta / thermostats_count));
+    WriteLine("Max delta: " # max_delta # " (" # max_delta_name # ")");
+    WriteLine("Heating demand: " # heating_demand # "%");
+}
+
+! Define system variable names
+string sv_avg_delta_name   = "Heating.delta.out.avg";
+string sv_max_delta_name   = "Heating.delta.out.max";
+string sv_max_delta_room   = "Heating.delta.out.max.room";
+string sv_demand_name      = "Heating.demand.out.pct";
+
+object systemVariables = dom.GetObject(ID_SYSTEM_VARIABLES);
+
+! --- Create / update: average delta ---
+object sv_avg_delta = dom.GetObject(sv_avg_delta_name);
+if (!sv_avg_delta) {
+    sv_avg_delta = dom.CreateObject(OT_VARDP);
+    sv_avg_delta.Name(sv_avg_delta_name);
+    systemVariables.Add(sv_avg_delta.ID());
+    sv_avg_delta.ValueType(ivtFloat);
+    sv_avg_delta.ValueSubType(istGeneric);
+    sv_avg_delta.ValueUnit("°C");
+    sv_avg_delta.ValueMin(-10);
+    sv_avg_delta.ValueMax(10);
+    sv_avg_delta.DPInfo("Average delta between setpoint and actual temp across all heating groups");
+    sv_avg_delta.State(0);
+    sv_avg_delta.Variable(0);
+    dom.RTUpdate(true);
+}
+sv_avg_delta.Variable(avg_delta);
+
+! --- Create / update: max delta ---
+object sv_max_delta = dom.GetObject(sv_max_delta_name);
+if (!sv_max_delta) {
+    sv_max_delta = dom.CreateObject(OT_VARDP);
+    sv_max_delta.Name(sv_max_delta_name);
+    systemVariables.Add(sv_max_delta.ID());
+    sv_max_delta.ValueType(ivtFloat);
+    sv_max_delta.ValueSubType(istGeneric);
+    sv_max_delta.ValueUnit("°C");
+    sv_max_delta.ValueMin(-10);
+    sv_max_delta.ValueMax(10);
+    sv_max_delta.DPInfo("Largest delta (setpoint - actual) across all heating groups");
+    sv_max_delta.State(0);
+    sv_max_delta.Variable(0);
+    dom.RTUpdate(true);
+}
+sv_max_delta.Variable(max_delta);
+
+! --- Create / update: room with max delta ---
+object sv_max_room = dom.GetObject(sv_max_delta_room);
+if (!sv_max_room) {
+    sv_max_room = dom.CreateObject(OT_VARDP);
+    sv_max_room.Name(sv_max_delta_room);
+    systemVariables.Add(sv_max_room.ID());
+    sv_max_room.ValueType(ivtString);
+    sv_max_room.ValueSubType(istChar8859);
+    sv_max_room.DPInfo("Name of the device with the highest heating demand");
+    sv_max_room.State("");
+    sv_max_room.Variable("");
+    dom.RTUpdate(true);
+}
+sv_max_room.Variable(max_delta_name);
+
+! --- Create / update: heating demand percentage ---
+object sv_demand = dom.GetObject(sv_demand_name);
+if (!sv_demand) {
+    sv_demand = dom.CreateObject(OT_VARDP);
+    sv_demand.Name(sv_demand_name);
+    systemVariables.Add(sv_demand.ID());
+    sv_demand.ValueType(ivtFloat);
+    sv_demand.ValueSubType(istGeneric);
+    sv_demand.ValueUnit("%");
+    sv_demand.ValueMin(0);
+    sv_demand.ValueMax(100);
+    sv_demand.DPInfo("Heating demand 0-100% derived from temperature deltas across all groups");
+    sv_demand.State(0);
+    sv_demand.Variable(0);
+    dom.RTUpdate(true);
+}
+sv_demand.Variable(heating_demand);
+
+if (debug) { WriteLine("END"); }
