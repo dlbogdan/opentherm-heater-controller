@@ -8,6 +8,12 @@ combined condition here. Any other input is the defined "no demand sensor"
 case: ``demand_raw`` is forced to ``demand_neutral`` (zero offset) and the
 gate is permissive (a clean no-op), so missing/stale room data never blocks
 heating.
+
+RESEARCH FLAG (arch §14 open items, 2026-10-05): this power-law P form is a
+1:1 carry-over from the HA blueprint and production-tuned empirically; the
+owner considers it due for improvement (no deadband, exponent < 1 amplifies
+tiny demand, pure P ignores demand trend). Investigate alternatives against
+real boiler response before changing anything here.
 """
 
 from control.util import clamp, sign

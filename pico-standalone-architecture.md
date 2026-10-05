@@ -884,7 +884,7 @@ solar accumulator (°C of offset), and the failsafe state.
     no network dependency). `transport: "otgw_uart"` selects the written
     `OTGWTransportDrv` (`app/transport/otgw.py`) on UART0 GP0/GP1 @9600 8N1
     (config `otgw_baud` / `otgw_tx_pin` / `otgw_rx_pin` / `otgw_ack_timeout_s`);
-    `"otgw"` stays the dummy until the gateway is wired and validated live.
+    `"otgw_dummy"` stays the dummy until the gateway is wired and validated live.
   - Confirm the CCU3 is reachable from the Pico's IP range/VLAN and that
     plain HTTP (no TLS) on the LAN is acceptable in this setup.
   - Sanity-check the HmIP-SWO `ILLUMINATION` reading against the
@@ -892,3 +892,18 @@ solar accumulator (°C of offset), and the failsafe state.
     directly).
   - Decide whether to keep the old HA mock's `away_mode` / `eco` keys for
     existing-dashboard compatibility (§12).
+  - **Research: improve the demand P-offset design** (owner intuition,
+    2026-10-05 — the current form "feels off"). The blueprint's power-law P
+    term was carried over 1:1 (`control/demand_p.py`) and production-tuned
+    empirically (`demand_neutral=0`, `demand_rate=3.8`, `demand_exponent=0.35`).
+    Known weaknesses to investigate: exponent < 1 amplifies tiny demand
+    (0.4 % → +2.8 °C); no deadband, so valve-hunting noise and the
+    `rooms_poll_s` snapshot lag feed straight into the boiler target; pure P
+    reacts only to demand magnitude, never to its trend (rooms warming vs
+    cooling look identical); the offset then interacts with `min_change`
+    rate-limiting and the solar accumulator in non-obvious ways. Candidate
+    directions: deadband around neutral, linear P + clamp, PI on room-temperature
+    trend with anti-windup, low-pass filtering of `demand_pct`, or driving
+    from `max_delta_room` instead of the diluted all-thermostat average.
+    Validate against real boiler response (OTGW flow/return telemetry +
+    room cache history) before adopting — do not re-tune blind.
