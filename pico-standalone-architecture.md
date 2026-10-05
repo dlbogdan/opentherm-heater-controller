@@ -341,7 +341,7 @@ main.py
 │   ├── dummy_otgw.py    ← DummyOTGW (current): OTGW CH/CS + ack, 1-min re-assert
 │   ├── dummy_directot.py← DummyDirectOT (debug): raw OpenTherm frames
 │   ├── factory.py       ← make_transport: picks the driver from app config
-│   ├── otgw.py          ← OTGWTransportDrv (first real): 30 s override refresh, reconnect
+│   ├── otgw.py          ← OTGWTransportDrv (written): UART CS/CH, ack-gated, 30 s re-assert + read-back reconcile
 │   └── direct_ot.py     ← OTDirectTransportDrv (later): PIO Manchester, heartbeat
 ├── ui/
 │   ├── display.py       ← OLED framebuf (SPI0)
@@ -880,7 +880,11 @@ solar accumulator (°C of offset), and the failsafe state.
     `<CMD>: <value>` echo (§2.3).
   - Confirm the Viessmann boiler's DHW/fault behavior when the Pico is the
     master (direct mode) before removing the existing thermostat.
-  - Decide UART vs TCP for the OTGW link (UART preferred for standalone).
+  - ~~Decide UART vs TCP for the OTGW link~~ — **Resolved: UART** (standalone,
+    no network dependency). `transport: "otgw_uart"` selects the written
+    `OTGWTransportDrv` (`app/transport/otgw.py`) on UART0 GP0/GP1 @9600 8N1
+    (config `otgw_baud` / `otgw_tx_pin` / `otgw_rx_pin` / `otgw_ack_timeout_s`);
+    `"otgw"` stays the dummy until the gateway is wired and validated live.
   - Confirm the CCU3 is reachable from the Pico's IP range/VLAN and that
     plain HTTP (no TLS) on the LAN is acceptable in this setup.
   - Sanity-check the HmIP-SWO `ILLUMINATION` reading against the

@@ -240,6 +240,15 @@ Verified on the installed MicroPython 1.29.0 build:
   `b"HTTP/1.0 200 OK".decode(errors="replace")` raises
   `function doesn't take keyword arguments`. Use a plain `.decode()` (HTTP
   status lines are ASCII) — never pass `errors=` / `encoding=`.
+- **`bytearray` has NO item deletion and NO `.clear()` in this build** (verified
+  on-device 2026-10-05): `del buf[:n]` raises `TypeError: 'bytearray' object
+  doesn't support item deletion` and `buf.clear()` raises `AttributeError:
+  'bytearray' object has no attribute 'clear'`. CPython allows both, so host
+  tests using them pass while the device fails. Consume with **slice rebinding**
+  (`buf = buf[n:]`, reassign `self._buf = bytearray()`). Episode 2026-10-05:
+  the OTGW driver's on-device selftest "timeouts" were actually the *fake
+  link's* `self._out.clear()` raising inside `_pump`'s except →
+  `ERR_DISCONNECTED`; the driver itself was fine.
 - The heap is **tight (~290 KB free** after boot with Wi-Fi + shell + control
   loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
   the total free looks sufficient (fragmentation). `gc.collect()` before a
@@ -466,10 +475,14 @@ returns that cache (instant). **Do not revert to a blocking `usocket` client**
 > how this house is wired. It is easy to get wrong, so do **not** assume a
 > setpoint is "set and forget" and do **not** guess the CS/CH mapping. Verified
 > against the OTGW documentation (otgw.tclcode.com, `standalone.html` +
-> `firmware.html`). The real `OTGWTransportDrv` is **not written yet** -- the
-> transport is still the debug dummy `DummyOTGW`, which mirrors the contract
-> (re-assert cadence + the expiry, via `simulate_expiry=True`) -- so hold this
-> contract in mind before wiring the real gateway, and validate against it.
+> `firmware.html`). The real driver now exists: `app/transport/otgw.py`
+> (`OTGWTransportDrv`), selected by `transport: "otgw_uart"` (UART0 GP0/GP1,
+> 9600 8N1 -- PIC gateway firmware; keys `otgw_baud` / `otgw_tx_pin` /
+> `otgw_rx_pin` / `otgw_ack_timeout_s`). The shipped default stays the
+> `DummyOTGW` under `"otgw"` until the gateway is physically wired and
+> validated live (it is not on the bench yet). Host contract:
+> `tests/test_otgw_driver.py` (fake standalone gateway) mirrors
+> `tests/test_otgw_contract.py`.
 
 **A setpoint is a held state, not a command.** OTGW (standalone) sends a fixed
 message sequence to the boiler (MsgID 1 = Control Setpoint among them); we
@@ -523,16 +536,37 @@ Consequences for this codebase (do not "fix" them away):
 - **CS >= 8** = active, must be re-asserted every minute. **CS < 8** = "safe",
   no re-assert needed.
 
-**Design contract for `OTGWTransportDrv` (when it is written):**
-- Track the last asserted CS + its timestamp; **re-assert on a ~30 s cadence**
-  (in `tick()` or a dedicated periodic task) AND immediately on a value change.
-- Map decision `heat` -> `CS=<target>` + `CH=1`; `off` -> `CS=0` + `CH=0`.
-- **Read back the actual CS (MsgID 1 / data point 1)** to reconcile: if it has
-  drifted from the intended value (the gateway reverted it), re-assert. Note
-  `read_flow_temp()` is the *measured* flow temperature (data point 25), NOT the
-  setpoint -- do not use it to decide "is the setpoint still held?".
-- `read_setpoint()` (data point 1) is the correct "held?" check; add it to the
-  `BoilerTransport` contract.
+**Design contract for `OTGWTransportDrv` -- IMPLEMENTED in `app/transport/otgw.py`:**
+- Tracks the last ACKED CS assert + timestamp; **re-asserts on the
+  `cs_reassert_s` (~30 s) cadence** in `tick()` (the dedicated re-assert task)
+  AND immediately when the MsgID 1 read-back has drifted below the held value
+  (the gateway reverted it).
+- Maps decision `heat` -> `CH=1` then `CS=<target>`; `off+release` -> `CH=0`,
+  `CS=0`, `CH=0`; off-reset -> single `CS=0` (never a CS >= 8 for "off").
+- **Ack-gated:** a command is "sent" only when the gateway echoes
+  `<CMD>: <value>` (e.g. `CS: 45.5`); no echo within `otgw_ack_timeout_s` =
+  failure. Rejected commands answer `NG`/`SE`/`BV`/`OR`/`NS`/`NF`/`OE`.
+- **Read-back:** `read_setpoint()` reports the wire truth for an active hold
+  (ack echo / `R`-line MsgID 1 -- 0.0 after a gateway revert), the held value
+  for a sub-8 hold, None when released. `read_flow_temp()` (data point 25) is
+  the *measured* flow and is NEVER the "held?" check.
+- **Telemetry without polling:** the gateway reports every OpenTherm message
+  as `T/B/R/A` + 8 hex digits (full frame, `opentherm.build_frame` layout);
+  IDs 25/28/17/0/5 fold into `read_flow_temp/return_temp/modulation` + status
+  flags. Gateway event lines ("Thermostat disconnected" ...) are EXPECTED in
+  standalone mode: INFO console only, never a fault.
+- **Fault policy (arch §9.1):** after `max_retries` consecutive ack failures
+  the driver reports FAULT and fast-fails writes during a backoff window (no
+  multi-second stall per command -- the retry-storm hazard). Pausing the
+  re-assert IS the standalone safe fallback: the gateway self-expires the
+  setpoint within a minute. The held intent survives so control resumes when
+  the link recovers.
+- Verified wire facts: commands `\r`-terminated, 8N1; PIC firmware speaks 9600
+  (`otgw_baud`). CS=0 makes the gateway fall back to its internal default CS
+  of 10 degC **with CHenable cleared** -- so a sub-8 hold reports the held
+  intent, not the gateway's internal default.
+- Remaining: live validation once the gateway is wired (host contract:
+  `tests/test_otgw_driver.py`). `PM=<id>` fault-detail pull is a follow-up.
 
 ## Framework ownership rules
 
@@ -570,6 +604,19 @@ Consequences for this codebase (do not "fix" them away):
   `transport demo` safety gate `dccc319` (1.1.69; demo still runs on the
   dummy, the contract refuses real drivers before any write). Host suite
   118 green throughout.
+- Real OTGW driver `app/transport/otgw.py` (firmware 1.1.70-1.1.73):
+  `OTGWTransportDrv` implements the pinned standalone-mode contract --
+  ack-gated `CH`/`CS` writes (`<CMD>: <value>` echo), sub-minute CS
+  re-assert + MsgID-1 drift reconciliation, FAULT/backoff fast-fail after
+  3 unacked writes (held intent survives; gateway self-expiry is the safe
+  fallback), telemetry folded from `T/B/R/A` status lines without polling,
+  `demo_safe=False`. Selected by `transport: "otgw_uart"` (+ `otgw_baud` /
+  `otgw_tx_pin` / `otgw_rx_pin` / `otgw_ack_timeout_s`); the shipped default
+  stays the DummyOTGW under `"otgw"` until the gateway is physically wired.
+  Also fixed `_run_selftest` slot-shadowing (inactive slot's suite was
+  winning sys.path order) and the MicroPython bytearray quirks (see runtime
+  facts). Verified on-device 1.1.73: selftest 37/37, autotests 21/21 (incl.
+  4 new `test_otgw_live` contract tests), rooms/weather pipeline healthy.
 
 See `pico-standalone-architecture.md` for the target architecture and the
 current implementation plan in repository/session memory when available.

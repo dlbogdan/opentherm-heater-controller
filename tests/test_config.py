@@ -108,6 +108,31 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(self.config.validate(), [])
         self.assertEqual(self.config.get("off_sentinel"), 5.0)
 
+    def test_otgw_uart_transport_is_accepted(self):
+        # The real OTGWTransportDrv is opt-in: "otgw" stays the dummy default,
+        # "otgw_uart" selects the real driver (factory + config agree).
+        self.set_value("transport", "otgw_uart")
+        self.assertEqual(self.config.validate(), [])
+        self.assertEqual(self.config.get("transport"), "otgw_uart")
+
+    def test_otgw_uart_link_keys_are_validated(self):
+        # GPIO 25-29 are Wi-Fi-owned (arch §3.1); the ack wait stays bounded.
+        self.set_value("otgw_tx_pin", 25)
+        self.set_value("otgw_rx_pin", -1)
+        self.set_value("otgw_baud", 300)
+        self.set_value("otgw_ack_timeout_s", 30)
+        problems = self.config.validate()
+        self.assertIn("otgw_tx_pin must be 0..24 (GPIO 25-29 are "
+                      "Wi-Fi-reserved)", problems)
+        self.assertIn("otgw_rx_pin must be 0..24 (GPIO 25-29 are "
+                      "Wi-Fi-reserved)", problems)
+        self.assertIn("otgw_baud must be >= 1200", problems)
+        self.assertIn("otgw_ack_timeout_s must be 1..10", problems)
+        values = self.config.all()
+        for key in ("otgw_tx_pin", "otgw_rx_pin", "otgw_baud",
+                    "otgw_ack_timeout_s"):
+            self.assertEqual(values[key], self.module.DEFAULTS[key])
+
     def test_cross_key_validation_repeats_until_result_is_consistent(self):
         # The first t_design/t_on repair changes t_on to 13, exposing a new
         # t_on/t_off violation because t_off was also 13.

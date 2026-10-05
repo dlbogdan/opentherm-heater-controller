@@ -93,6 +93,19 @@ def ticks_diff(started_ms):
     return max(0, now - (started_ms & 0xFFFFFFFF))
 
 
+def elapsed_ms(started_ms, now_ms):
+    """Wrap-safe milliseconds from ``started_ms`` to ``now_ms``.
+
+    ``None`` when there is no starting point. Same signed uint32 semantics as
+    ``time.ticks_diff`` (AGENTS.md: never a raw ticks subtraction).
+    """
+    if started_ms is None:
+        return None
+    if hasattr(time, "ticks_diff"):
+        return max(0, time.ticks_diff(int(now_ms), int(started_ms)))
+    return max(0, int(now_ms) - (int(started_ms) & 0xFFFFFFFF))
+
+
 def otgw_encode(cmd, value=0):
     """Pack an OTGW command + value into the 32-bit record payload."""
     return ((int(cmd) & 0xFF) << 16) | (int(value) & 0xFFFF)

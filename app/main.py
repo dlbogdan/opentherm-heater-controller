@@ -102,7 +102,20 @@ async def _run_optional_service(coro, name):
 def _run_selftest(_args=""):
     """Run the control-core self-test; return 'PASS/FAIL: ...' + check lines."""
     import builtins
-    for p in ("apps/a", "apps/b"):
+    # Put the ACTIVE slot first. The launcher's activate_slot_path already
+    # guarantees this for the live app, but the old code inserted apps/b last
+    # regardless, so an older inactive slot could shadow the running
+    # firmware's selftest module (2026-10-05: the shell ran slot b's 34-check
+    # suite while slot a ran 1.1.70). The explicit ordering also covers the
+    # raw-REPL path where no slot is on sys.path yet.
+    try:
+        from lib.coresys.ota_state import load_state
+        active = load_state()["active"]
+    except Exception:
+        active = "a"
+    if active not in ("a", "b"):
+        active = "a"
+    for p in ("apps/" + ("b" if active == "a" else "a"), "apps/" + active):
         try:
             sys.path.insert(0, p)
         except Exception:
@@ -156,9 +169,9 @@ async def main():
     # Shared audited transport: LogTransport (bounded in-memory ring) wraps
     # the driver; the shell observes this exact instance and the control loop
     # applies its decisions through the same object. The driver is selected
-    # by config (transport: "otgw" | "direct_ot"); until the real gateway
-    # drivers land each backend is its debug dummy (DummyOTGW / DummyDirectOT)
-    # mirroring the real commands, fully observable via the `transport` shell.
+    # by config (transport: "otgw" | "otgw_uart" | "direct_ot"): the dummies
+    # ("otgw" / "direct_ot") mirror the real commands and stay the default
+    # until the gateway is wired; "otgw_uart" is the real OTGWTransportDrv.
     from transport.log import LogTransport
     from transport.factory import make_transport
     transport = LogTransport(make_transport(config))

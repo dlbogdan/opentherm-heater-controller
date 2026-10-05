@@ -240,6 +240,47 @@ def run():
     c.ok("seq: exact command sequence (release + stale reset)",
          seq_tr.commands == expected_seq)
 
+    # -- Real OTGW driver against a fake gateway link (no hardware needed) ---
+    # Pins the OTGWTransportDrv contract on-device too (ack-gated CH/CS, the
+    # release pair, the demo safety gate) with a minimal inline gateway that
+    # answers "<CMD>: <value>" like the PIC firmware.
+    from transport.otgw import OTGWTransportDrv
+
+    class _FakeLink(object):
+        def __init__(self):
+            self._out = bytearray()
+            self._cmd = bytearray()
+
+        def write(self, data):
+            self._cmd.extend(data)
+            while True:
+                idx = self._cmd.find(b"\r")
+                if idx < 0:
+                    break
+                line = bytes(self._cmd[:idx]).decode()
+                self._cmd = self._cmd[idx + 1:]  # no del: MicroPython bytearray
+                if line[:2] in ("CS", "CH"):
+                    self._out.extend((line[:2] + ": " + line[3:] + "\r\n")
+                                     .encode())
+            return len(data)
+
+        def readall(self):
+            if not self._out:
+                return None
+            data = bytes(self._out)
+            self._out = bytearray()  # no .clear(): MicroPython bytearray
+            return data
+
+    drv_real = OTGWTransportDrv(_FakeLink(), reassert_s=30, ack_timeout_ms=500)
+    tr_real = LogTransport(drv_real)
+    c.ok("otgw: heat writes CH then CS (acked, setpoint held)",
+         tr_real.set_heating(True) and tr_real.set_flow_target(45.5)
+         and tr_real.read_setpoint() == 45.5)
+    c.ok("otgw: release lands CS=0 + CH=0, nothing held",
+         tr_real.release_override() and tr_real.read_setpoint() is None)
+    c.ok("otgw: demo safety gate refuses the real driver",
+         drv_real.demo_safe is False)
+
     print("\n%d checks, %d failed" % (c.total, c.failed))
     return c.failed == 0
 

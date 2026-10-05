@@ -58,7 +58,19 @@ DEFAULTS = {
     # Control loop (periodic tick interval in seconds; applied at boot)
     "control_tick_s": 60,
     # Transport
-    "transport": "otgw",          # "otgw" | "direct_ot"
+    # "otgw" = debug dummy (shipped default until the gateway is wired and
+    # validated live); "otgw_uart" = the real OTGWTransportDrv on a
+    # machine.UART link (keys below); "direct_ot" = direct-OT dummy.
+    "transport": "otgw",          # "otgw" | "otgw_uart" | "direct_ot"
+    # OTGW UART link (PIC gateway firmware: 8N1 at 9600). GP0/GP1 are UART0's
+    # default pair and free in the arch §3.2 pin plan; 25-29 are Wi-Fi-owned.
+    "otgw_baud": 9600,
+    "otgw_tx_pin": 0,
+    "otgw_rx_pin": 1,
+    # Bounded per-command ack wait (seconds). A healthy gateway echoes in
+    # tens of ms; the timeout only bounds a dead-link attempt before the
+    # driver fast-fails in FAULT backoff (docs allow 2-5 s; keep it small).
+    "otgw_ack_timeout_s": 2,
     # The "off" setpoint the rate limiter resets a stale setpoint to.
     # MUST be < 8 degC: per the OTGW vigilance rule (AGENTS.md, OTGW
     # section) a CS >= 8 is an ACTIVE setpoint -- it heats the boiler AND
@@ -190,7 +202,7 @@ class Config:
                 reset(key, "%s has invalid type" % key)
 
         allowed = {
-            "transport": ("otgw", "direct_ot"),
+            "transport": ("otgw", "otgw_uart", "direct_ot"),
             "t_out_source": ("ccu3", "local", "auto"),
             "lux_source": ("ccu3", "local", "auto"),
         }
@@ -221,6 +233,14 @@ class Config:
             ("cs_reassert_s", v["cs_reassert_s"] >= 5
              and v["cs_reassert_s"] < 60,
              "cs_reassert_s must be 5..59 (OTGW needs a sub-minute re-assert)"),
+            ("otgw_baud", v["otgw_baud"] >= 1200,
+             "otgw_baud must be >= 1200"),
+            ("otgw_tx_pin", 0 <= v["otgw_tx_pin"] <= 24,
+             "otgw_tx_pin must be 0..24 (GPIO 25-29 are Wi-Fi-reserved)"),
+            ("otgw_rx_pin", 0 <= v["otgw_rx_pin"] <= 24,
+             "otgw_rx_pin must be 0..24 (GPIO 25-29 are Wi-Fi-reserved)"),
+            ("otgw_ack_timeout_s", 1 <= v["otgw_ack_timeout_s"] <= 10,
+             "otgw_ack_timeout_s must be 1..10"),
             ("rooms_poll_s", v["rooms_poll_s"] >= 30,
              "rooms_poll_s must be >= 30"),
             ("net_port", 1 <= v["net_port"] <= 65535,
