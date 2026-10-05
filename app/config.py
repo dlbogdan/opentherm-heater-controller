@@ -58,10 +58,10 @@ DEFAULTS = {
     # Control loop (periodic tick interval in seconds; applied at boot)
     "control_tick_s": 60,
     # Transport
-    # "otgw" = debug dummy (shipped default until the gateway is wired and
-    # validated live); "otgw_uart" = the real OTGWTransportDrv on a
-    # machine.UART link (keys below); "direct_ot" = direct-OT dummy.
-    "transport": "otgw",          # "otgw" | "otgw_uart" | "direct_ot"
+    # "otgw_dummy" = debug dummy (shipped default until the gateway is wired
+    # and validated live); "otgw_uart" = the real OTGWTransportDrv on a
+    # machine.UART link (keys below); "direct_ot_dummy" = direct-OT dummy.
+    "transport": "otgw_dummy",   # "otgw_dummy" | "otgw_uart" | "direct_ot_dummy"
     # OTGW UART link (PIC gateway firmware: 8N1 at 9600). GP0/GP1 are UART0's
     # default pair and free in the arch §3.2 pin plan; 25-29 are Wi-Fi-owned.
     "otgw_baud": 9600,
@@ -81,7 +81,7 @@ DEFAULTS = {
     "off_sentinel": 0.0,
     # OTGW re-assert cadence (seconds): a CS >= 8 degC must be re-asserted at
     # least every minute (AGENTS.md, OTGW section), so this stays sub-minute
-    # (default 30 s = 2x margin). Ignored by "direct_ot" (no obligation).
+    # (default 30 s = 2x margin). Ignored by "direct_ot_dummy" (no obligation).
     "cs_reassert_s": 30,
     # Sensor sources (arch §3.5)
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"
@@ -202,7 +202,7 @@ class Config:
                 reset(key, "%s has invalid type" % key)
 
         allowed = {
-            "transport": ("otgw", "otgw_uart", "direct_ot"),
+            "transport": ("otgw_dummy", "otgw_uart", "direct_ot_dummy"),
             "t_out_source": ("ccu3", "local", "auto"),
             "lux_source": ("ccu3", "local", "auto"),
         }

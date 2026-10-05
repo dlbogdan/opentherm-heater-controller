@@ -25,7 +25,7 @@ class FakeConfig:
             "b": 0.78,               # float
             "net_port": 23,          # int
             "mqtt_enabled": False,   # bool
-            "transport": "otgw",     # str, allowed: otgw|direct_ot
+            "transport": "otgw_dummy",  # str, allowed: otgw_dummy|otgw_uart|direct_ot_dummy
             "ccu3_url": "http://10.9.30.10/api/homematic.cgi",  # str
         }
         self._values = {}
@@ -48,7 +48,7 @@ class FakeConfig:
             self._values["net_port"] = self.defaults["net_port"]
             problems.append("net_port must be in 1..65535")
         transport = self._values.get("transport", self.defaults["transport"])
-        if transport not in ("otgw", "direct_ot"):
+        if transport not in ("otgw_dummy", "direct_ot_dummy"):
             self._values["transport"] = self.defaults["transport"]
             problems.append("transport has invalid value")
         return problems
@@ -92,9 +92,9 @@ class ConfigHandlerTests(unittest.TestCase):
         self.assertIs(self.config.get("mqtt_enabled"), False)
 
     def test_set_string(self):
-        self.assertIn("OK: transport = direct_ot",
-                      self.handle("set transport direct_ot"))
-        self.assertEqual(self.config.get("transport"), "direct_ot")
+        self.assertIn("OK: transport = direct_ot_dummy",
+                      self.handle("set transport direct_ot_dummy"))
+        self.assertEqual(self.config.get("transport"), "direct_ot_dummy")
 
     def test_set_wrong_type_rejected_by_coercion(self):
         self.assertIn("set failed", self.handle("set t_on abc"))
@@ -109,7 +109,7 @@ class ConfigHandlerTests(unittest.TestCase):
     def test_set_invalid_enum_rejected_and_reset(self):
         response = self.handle("set transport bogus")
         self.assertIn("REJECTED", response)
-        self.assertEqual(self.config.get("transport"), "otgw", "reset")
+        self.assertEqual(self.config.get("transport"), "otgw_dummy", "reset")
 
     def test_set_unknown_key(self):
         self.assertIn("unknown config key", self.handle("set nope 1"))

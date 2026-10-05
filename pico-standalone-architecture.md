@@ -415,7 +415,7 @@ DEFAULTS = {
     # Rate limiting
     "min_change": 2,
     # Transport
-    "transport": "otgw",          # "otgw" | "direct_ot"
+    "transport": "otgw_dummy",    # "otgw_dummy" | "otgw_uart" | "direct_ot_dummy"
     "off_sentinel": 0.0,          # °C value that means "off"; must be < 8 (OTGW active-setpoint rule; supersedes the blueprint's 20)
     # Sensor sources (§3.5)
     "t_out_source": "auto",       # "ccu3" | "local" | "auto"

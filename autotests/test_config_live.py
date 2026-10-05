@@ -35,7 +35,7 @@ class TestConfigInvariants(unittest.TestCase):
 
     def test_transport_choice_valid(self):
         self.assertIn(config.get("transport"),
-                      ("otgw", "otgw_uart", "direct_ot"))
+                      ("otgw_dummy", "otgw_uart", "direct_ot_dummy"))
 
 
 class TestState(unittest.TestCase):

@@ -169,9 +169,9 @@ async def main():
     # Shared audited transport: LogTransport (bounded in-memory ring) wraps
     # the driver; the shell observes this exact instance and the control loop
     # applies its decisions through the same object. The driver is selected
-    # by config (transport: "otgw" | "otgw_uart" | "direct_ot"): the dummies
-    # ("otgw" / "direct_ot") mirror the real commands and stay the default
-    # until the gateway is wired; "otgw_uart" is the real OTGWTransportDrv.
+    # by config (transport: "otgw_dummy" | "otgw_uart" | "direct_ot_dummy"):
+    # the dummies mirror the real commands and stay the default until the
+    # gateway is wired; "otgw_uart" is the real OTGWTransportDrv.
     from transport.log import LogTransport
     from transport.factory import make_transport
     transport = LogTransport(make_transport(config))

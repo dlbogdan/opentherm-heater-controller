@@ -109,11 +109,27 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(self.config.get("off_sentinel"), 5.0)
 
     def test_otgw_uart_transport_is_accepted(self):
-        # The real OTGWTransportDrv is opt-in: "otgw" stays the dummy default,
-        # "otgw_uart" selects the real driver (factory + config agree).
+        # The real OTGWTransportDrv is opt-in: "otgw_dummy" is the dummy
+        # default, "otgw_uart" selects the real driver (factory + config
+        # agree). Dummy keys carry the explicit _dummy suffix.
         self.set_value("transport", "otgw_uart")
         self.assertEqual(self.config.validate(), [])
         self.assertEqual(self.config.get("transport"), "otgw_uart")
+
+    def test_dummy_transport_names_are_explicit(self):
+        # Bare "otgw" / "direct_ot" are NOT valid values: a config value can
+        # never look like a real backend. They reset to the dummy default.
+        self.set_value("transport", "otgw")
+        problems = self.config.validate()
+        self.assertIn("transport has invalid value", problems)
+        self.assertEqual(self.config.get("transport"), "otgw_dummy")
+        self.set_value("transport", "direct_ot")
+        problems = self.config.validate()
+        self.assertIn("transport has invalid value", problems)
+        self.assertEqual(self.config.get("transport"), "otgw_dummy")
+        self.set_value("transport", "direct_ot_dummy")
+        self.assertEqual(self.config.validate(), [])
+        self.assertEqual(self.config.get("transport"), "direct_ot_dummy")
 
     def test_otgw_uart_link_keys_are_validated(self):
         # GPIO 25-29 are Wi-Fi-owned (arch §3.1); the ack wait stays bounded.

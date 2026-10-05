@@ -479,7 +479,7 @@ returns that cache (instant). **Do not revert to a blocking `usocket` client**
 > (`OTGWTransportDrv`), selected by `transport: "otgw_uart"` (UART0 GP0/GP1,
 > 9600 8N1 -- PIC gateway firmware; keys `otgw_baud` / `otgw_tx_pin` /
 > `otgw_rx_pin` / `otgw_ack_timeout_s`). The shipped default stays the
-> `DummyOTGW` under `"otgw"` until the gateway is physically wired and
+> `DummyOTGW` under `"otgw_dummy"` until the gateway is physically wired and
 > validated live (it is not on the bench yet). Host contract:
 > `tests/test_otgw_driver.py` (fake standalone gateway) mirrors
 > `tests/test_otgw_contract.py`.
@@ -612,7 +612,8 @@ Consequences for this codebase (do not "fix" them away):
   fallback), telemetry folded from `T/B/R/A` status lines without polling,
   `demo_safe=False`. Selected by `transport: "otgw_uart"` (+ `otgw_baud` /
   `otgw_tx_pin` / `otgw_rx_pin` / `otgw_ack_timeout_s`); the shipped default
-  stays the DummyOTGW under `"otgw"` until the gateway is physically wired.
+  stays the DummyOTGW under `"otgw_dummy"` (dummy config keys carry the
+  explicit `_dummy` suffix) until the gateway is physically wired.
   Also fixed `_run_selftest` slot-shadowing (inactive slot's suite was
   winning sys.path order) and the MicroPython bytearray quirks (see runtime
   facts). Verified on-device 1.1.73: selftest 37/37, autotests 21/21 (incl.

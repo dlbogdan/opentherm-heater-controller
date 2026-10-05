@@ -421,7 +421,7 @@ class SafetyAndContractTests(unittest.TestCase):
         drv = make_transport(cfg, link=FakeOTGW(clock))
         self.assertIsInstance(drv, OTGWTransportDrv)
         self.assertEqual(drv.reassert_interval_s, 30)
-        self.assertIsInstance(make_transport({"transport": "otgw"}),
+        self.assertIsInstance(make_transport({"transport": "otgw_dummy"}),
                              DummyOTGW)  # the shipped default stays the dummy
 
     def test_garbage_and_event_lines_are_tolerated(self):

@@ -1,25 +1,27 @@
 """Boiler transport factory: pick the driver from app config.
 
-``"otgw"`` is the debug dummy (``DummyOTGW``) -- the shipped default until the
-gateway is physically wired and validated live. ``"otgw_uart"`` selects the
-REAL ``OTGWTransportDrv`` on a ``machine.UART`` link (config ``otgw_baud`` /
-``otgw_tx_pin`` / ``otgw_rx_pin`` / ``otgw_ack_timeout_s``); ``"direct_ot"``
-stays the direct-OpenTherm dummy (its real driver lands later). The ``link``
-argument exists for host tests: pass a gateway simulator and no UART is
-built (``machine`` is imported only on the device path).
+``"otgw_dummy"`` is the debug dummy (``DummyOTGW``) -- the shipped default
+until the gateway is physically wired and validated live. ``"otgw_uart"``
+selects the REAL ``OTGWTransportDrv`` on a ``machine.UART`` link (config
+``otgw_baud`` / ``otgw_tx_pin`` / ``otgw_rx_pin`` / ``otgw_ack_timeout_s``);
+``"direct_ot_dummy"`` stays the direct-OpenTherm dummy (its real driver lands
+later). Dummy keys carry the explicit ``_dummy`` suffix so a config value can
+never look like a real backend. The ``link`` argument exists for host tests:
+pass a gateway simulator and no UART is built (``machine`` is imported only on
+the device path).
 """
 
 
 def make_transport(config, link=None):
     """Return a ``BoilerTransport`` driver for ``config["transport"]``.
 
-    ``"otgw"`` (the default) is the OTGW dummy with its re-assert cadence
-    taken from ``cs_reassert_s``; ``"otgw_uart"`` is the real driver with the
-    same cadence plus the bounded ack wait; ``"direct_ot"`` is the
-    direct-OpenTherm dummy (no re-assert obligation).
+    ``"otgw_dummy"`` (the default) is the OTGW dummy with its re-assert
+    cadence taken from ``cs_reassert_s``; ``"otgw_uart"`` is the real driver
+    with the same cadence plus the bounded ack wait; ``"direct_ot_dummy"`` is
+    the direct-OpenTherm dummy (no re-assert obligation).
     """
     name = config.get("transport")
-    if name == "direct_ot":
+    if name == "direct_ot_dummy":
         from transport.dummy_directot import DummyDirectOT
         return DummyDirectOT()
     if name == "otgw_uart":

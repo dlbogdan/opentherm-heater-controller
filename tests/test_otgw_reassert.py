@@ -141,13 +141,13 @@ class ContractAndFactoryTests(unittest.TestCase):
         self.assertEqual(DummyDirectOT().reassert_interval_s, 0)
 
     def test_factory_selects_driver(self):
-        self.assertIsInstance(make_transport({"transport": "otgw"}),
+        self.assertIsInstance(make_transport({"transport": "otgw_dummy"}),
                               DummyOTGW)
         self.assertEqual(make_transport(
-            {"transport": "otgw", "cs_reassert_s": 45}).reassert_interval_s,
+            {"transport": "otgw_dummy", "cs_reassert_s": 45}).reassert_interval_s,
             45)
         self.assertIsInstance(
-            make_transport({"transport": "direct_ot"}), DummyDirectOT)
+            make_transport({"transport": "direct_ot_dummy"}), DummyDirectOT)
 
     def test_status_reports_held_setpoint(self):
         transport = LogTransport(DummyOTGW())
