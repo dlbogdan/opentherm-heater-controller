@@ -128,6 +128,15 @@ Device: `rooms` JSON already carries `ts`; spot-check against `status`
 
 ## Deferred (tracked, not scheduled)
 
+- **Framework: candidate-slot failures are console-only**
+  (episode 2026-10-07, rejected 1.1.77 candidate): `slot_main.py:79`
+  prints `Candidate slot %s failed: %s` to the serial console only —
+  `/log.txt` stays clean, so over the network a rejected candidate with
+  a clean log is undiagnosable (we only caught it because the app-side
+  containment re-logged its own error). Fix belongs in `micropy-system`:
+  route the launcher's failure messages through `logger.error`
+  (file-logged), keeping the console print. Cataloged in
+  `MICROPYTHON-GOTCHAS.md` §5.
 - **Framework: rollback after confirm leaves `/version.txt` lying**
   (episode 2026-10-07, rejected 1.1.77 candidate): `slot_main` confirms
   (writes `/version.txt` = candidate version), `main()` then raises, and
