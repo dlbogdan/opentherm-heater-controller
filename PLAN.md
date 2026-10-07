@@ -15,7 +15,7 @@ deploy + device evidence + commit; P5 is host-only.
 
 ---
 
-## P1 — Apply `lux_mult` (the solar calibration is silently dead) — CODE COMPLETE
+## P1 — Apply `lux_mult` (the solar calibration is silently dead) — COMPLETE
 
 **Problem.** The blueprint multiplies lux before the solar math
 (`boiler_weather_compensation.yaml:367-369`) and `control/solar_accum.py:9`
@@ -37,11 +37,11 @@ end-to-end suite `tests/test_pipeline_e2e.py` (full stack: fake CCU3 weather
 must produce different boiler setpoints — 56 vs 57 at the pinned operating
 point). Device: **deployed as 1.1.75** (slot b promoted; the first deploy
 reboot was lost during an ENOMEM shell storm — manual serve + shell `reboot`
-promoted, AGENTS.md retry rule). `selftest` 37/37 green on 1.1.75.
-`autotests/test_pipeline_live.py` (pins cached lux == round(raw × mult)
-against the real sensor over the pooled session) is written but **pending a
-USB `autotest.py sync` push** — the shell has no upload path by design
-(`repl` disabled).
+promoted, AGENTS.md retry rule). `selftest` 37/37 green. The live suite
+`autotests/test_pipeline_live.py` (cached lux == round(raw × mult) against
+the real sensor, pooled session) was OTA-delivered by the new
+`deploy.py --debug` flow (firmware 1.1.79) and **passed 3/3 on the
+production board**; full live set 24/24 green.**
 
 ## P2 — Bound weather discovery; stop the control-tick discovery storm
 
@@ -128,6 +128,14 @@ Device: `rooms` JSON already carries `ts`; spot-check against `status`
 
 ## Deferred (tracked, not scheduled)
 
+- **Framework: rollback after confirm leaves `/version.txt` lying**
+  (episode 2026-10-07, rejected 1.1.77 candidate): `slot_main` confirms
+  (writes `/version.txt` = candidate version), `main()` then raises, and
+  `rollback_candidate` reverts the slot but not the version file —
+  `status` then reports the REJECTED version while the previous firmware
+  actually runs (selftest/behaviour are the old build). Fix belongs in
+  `micropy-system`: restore the previous version file on rollback (or
+  derive status version from the running slot).
 - **Long-uptime ENOMEM degradation** (observed 2026-10-07 on 1.1.74): after
   ~32.7 h uptime the CCU3 + rooms polls began failing with `[Errno 12]
   ENOMEM` while `status` still reported ~282 KB free — fragmentation, not

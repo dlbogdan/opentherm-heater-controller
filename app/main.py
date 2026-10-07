@@ -34,6 +34,7 @@ loop and halts the device).
 """
 
 import sys
+import os
 import time
 import gc
 
@@ -136,6 +137,39 @@ def _run_selftest(_args=""):
     verdict = "PASS" if ok else "FAIL"
     return "%s: control core self-test%s" % (
         verdict, ("\n" + detail) if detail else "")
+
+
+def _isdir(path):
+    """Directory probe that works on this MicroPython build.
+
+    Verified on-device 2026-10-07: this 1.29.0 rp2 build has NO os.path
+    attribute at all (``os.path.isdir`` -> AttributeError, which killed the
+    1.1.77 candidate). os.stat is always present; S_IFDIR is 0o40000.
+    """
+    try:
+        return bool(os.stat(path)[0] & 0o40000)
+    except OSError:
+        return False
+
+
+def _autotests_dir():
+    """Where the device test suites live (registration-time resolution).
+
+    The slot-packaged ``autotests/`` (a --debug OTA build: integrity-checked
+    and versioned with the RUNNING firmware) outranks the USB push directory
+    ``/autotests``, so stale push debris can never shadow the suites that
+    shipped with this firmware. The launcher put the slot on sys.path; a
+    release build has no such directory and the framework default applies.
+    (Explicit here because the runner in /lib/coresys is only refreshed by
+    the USB push/provisioning -- the app must carry its own contract.)
+    """
+    for entry in sys.path:
+        if not entry:
+            continue
+        candidate = entry.rstrip("/") + "/autotests"
+        if _isdir(candidate):
+            return candidate
+    return None
 
 
 async def main():
@@ -340,13 +374,32 @@ async def main():
         register_rooms_commands(shell, rooms)
         # Device test suites (framework runner): unittest-style suites are
         # pushed to /autotests by the host tool (tools/target/autotest.py)
-        # and run INSIDE this loop -- live singletons, real async I/O, heap
+        # or OTA'd INSIDE the slot by a --debug build (deploy.py --debug).
+        # They run INSIDE this loop -- live singletons, real async I/O, heap
         # and timeout guarded. The runner module itself is pushed to
         # /lib/coresys by the same tool: a board that never received it
         # (production firmware) simply has no 'test' command.
         try:
             from lib.coresys.autotest import register as register_autotests
-            register_autotests(shell, warn=warn)
+            # A test harness must never take down the heating app: any
+            # registration failure is contained and file-logged (only
+            # ImportError -- no runner on release boards -- stays silent).
+            try:
+                tests_dir = _autotests_dir()
+                if tests_dir:
+                    try:
+                        register_autotests(shell, warn=warn,
+                                           directory=tests_dir)
+                    except TypeError:
+                        # Runner copy predates the directory kwarg: keep
+                        # the test command on its default directory.
+                        register_autotests(shell, warn=warn)
+                        warn("Shell: runner predates directory kwarg; "
+                             "slot suites (%s) not registered" % tests_dir)
+                else:
+                    register_autotests(shell, warn=warn)
+            except Exception as exc:
+                warn("Shell: autotest registration failed: %s" % exc)
         except ImportError:
             pass
         tasks.create_task(

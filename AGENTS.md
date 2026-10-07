@@ -74,13 +74,24 @@ python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 ```
 
 Device test suites (framework `lib.coresys.autotest` + `tools/target/autotest.py`):
-unittest-style suites live in the PROJECT's `autotests/` (host, never in the
-OTA package), are pushed to the board's `/autotests` over USB, and run
+unittest-style suites live in the PROJECT's `autotests/` (host) and run
 remotely inside the live app's loop over the shell's `test run [PATTERN]`
-(live singletons, real async I/O, per-test timeout + heap guard):
+(live singletons, real async I/O, per-test timeout + heap guard). Two
+delivery paths (2026-10-07: production boards have no USB, so OTA is the
+primary one):
+
+- **OTA (production):** `./micropy-system/tools/target/deploy.py --debug`
+  packages `autotests/` (+ the framework `unittest.py` shim) INSIDE the
+  slot as plain `.py` — integrity-checked and versioned with the firmware.
+  The app registers the runner on `<slot>/autotests`, which outranks the
+  push directory, so stale USB debris never shadows the suites that
+  shipped with the running firmware. A later release (no-flag) OTA drops
+  the directory. `--debug` also marks the build in the tool output.
+- **USB push (bench):** `autotest.py sync` uploads to `/autotests` and
+  runs (still works; used when the board is on the bench).
 
 ```sh
-python micropy-system/tools/target/autotest.py sync      # push (USB) + run (LAN)
+python micropy-system/tools/target/autotest.py run [PATTERN]   # LAN only
 python micropy-system/tools/target/telnet.py 10.9.30.76 test run config
 ```
 
@@ -240,6 +251,14 @@ Verified on the installed MicroPython 1.29.0 build:
   `b"HTTP/1.0 200 OK".decode(errors="replace")` raises
   `function doesn't take keyword arguments`. Use a plain `.decode()` (HTTP
   status lines are ASCII) — never pass `errors=` / `encoding=`.
+- **The `os` module has NO `path` attribute in this build** (verified
+  on-device 2026-10-07): `os.path.isdir(...)` dies with `AttributeError:
+  'module' object has no attribute 'path'` — CPython hosts never see this.
+  Episode: the 1.1.77 candidate was rejected because `main()` used
+  `os.path.isdir` (the AttributeError escaped an `except OSError`, and the
+  candidate-failure message is console-only — `/log.txt` stayed clean).
+  Probe with `os.stat(path)[0] & 0o40000` (S_IFDIR); `os.stat` is always
+  present. Pinned by `micropy-system/tests/test_autotest_runner.py`.
 - **`bytearray` has NO item deletion and NO `.clear()` in this build** (verified
   on-device 2026-10-05): `del buf[:n]` raises `TypeError: 'bytearray' object
   doesn't support item deletion` and `buf.clear()` raises `AttributeError:
@@ -631,6 +650,20 @@ Consequences for this codebase (do not "fix" them away):
   winning sys.path order) and the MicroPython bytearray quirks (see runtime
   facts). Verified on-device 1.1.73: selftest 37/37, autotests 21/21 (incl.
   4 new `test_otgw_live` contract tests), rooms/weather pipeline healthy.
+
+- P1 lux_mult + OTA test delivery (firmware 1.1.75-1.1.79): `lux_mult`
+  applied at the sensor source (1.1.75, PLAN.md P1). New `--debug` build
+  flag (`assemble.py`/`build_firmware.py`/`deploy.py`) packages the
+  project's `autotests/` + the framework unittest shim INSIDE the OTA slot
+  as plain `.py`; the runner resolves `<slot>/autotests` ahead of the USB
+  push dir, and the app registers it explicitly (the pushed
+  `/lib/coresys` runner is stale between provisions) with containment +
+  TypeError fallback so a test harness can never take down the heating
+  app. Verified on-device 1.1.79: `test list` shows 5 suites from
+  `/apps/a/autotests`, live suites 24/24 (incl. 3 new pipeline tests
+  pinning lux == raw x mult against the real sensor), selftest 37/37.
+  Episode pinned on the way: this build's `os` has no `.path` (rejected
+  1.1.77 candidate; see runtime facts).
 
 See `pico-standalone-architecture.md` for the target architecture and
 `PLAN.md` for the current implementation plan.
