@@ -1,7 +1,11 @@
 # Pico 2W Standalone Boiler Weather Compensation — Architecture
 
-> **Status:** Design draft. Transport-agnostic control core with an **OTGW-first**
-> transport; direct OpenTherm-master support is a later, additive transport.
+> **Status:** Implemented and running in production (firmware 1.1.7x): the
+> transport-agnostic control core, the CCU3 weather + heating-group room
+> model, the bounded audit ring, and the OTGW driver (`transport: "otgw_uart"`,
+> written and contract-verified, pending physical gateway wiring) are all built
+> and device-verified. Direct OpenTherm-master support remains a later,
+> additive transport. The current work plan lives in [`PLAN.md`](PLAN.md).
 >
 > **Companion docs:**
 > - [`microcontroller-logic-spec.md`](microcontroller-logic-spec.md) — full algorithm, formulas, state machine, edge cases, worked examples.
@@ -885,11 +889,16 @@ solar accumulator (°C of offset), and the failsafe state.
     `OTGWTransportDrv` (`app/transport/otgw.py`) on UART0 GP0/GP1 @9600 8N1
     (config `otgw_baud` / `otgw_tx_pin` / `otgw_rx_pin` / `otgw_ack_timeout_s`);
     `"otgw_dummy"` stays the dummy until the gateway is wired and validated live.
-  - Confirm the CCU3 is reachable from the Pico's IP range/VLAN and that
-    plain HTTP (no TLS) on the LAN is acceptable in this setup.
-  - Sanity-check the HmIP-SWO `ILLUMINATION` reading against the
+  - ~~Confirm the CCU3 is reachable from the Pico's IP range/VLAN and that
+    plain HTTP (no TLS) on the LAN is acceptable in this setup.~~ —
+    **Resolved:** verified live; the production board polls
+    `http://10.9.30.10/api/homematic.cgi` daily (AGENTS.md, CCU3 reference).
+  - ~~Sanity-check the HmIP-SWO `ILLUMINATION` reading against the
     `lux_low`/`lux_high` thresholds (both are in lux, so it should map
-    directly).
+    directly).~~ — **Resolved:** the mapping is direct; the sensor's partial
+    shading is compensated by the production `lux_mult: 1.4` calibration.
+    (Firmware gap found 2026-10-07: `lux_mult` is not yet applied anywhere —
+    `PLAN.md` P1.)
   - Decide whether to keep the old HA mock's `away_mode` / `eco` keys for
     existing-dashboard compatibility (§12).
   - **Research: improve the demand P-offset design** (owner intuition,

@@ -632,5 +632,5 @@ Consequences for this codebase (do not "fix" them away):
   facts). Verified on-device 1.1.73: selftest 37/37, autotests 21/21 (incl.
   4 new `test_otgw_live` contract tests), rooms/weather pipeline healthy.
 
-See `pico-standalone-architecture.md` for the target architecture and the
-current implementation plan in repository/session memory when available.
+See `pico-standalone-architecture.md` for the target architecture and
+`PLAN.md` for the current implementation plan.
