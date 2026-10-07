@@ -236,83 +236,33 @@ away):
 
 ## MicroPython/runtime facts
 
-Verified on the installed MicroPython 1.29.0 build:
+**Canonical catalog: `MICROPYTHON-GOTCHAS.md` — read it before writing or
+reviewing firmware code, and append an entry the moment you learn another
+device-only failure.** Every entry there was verified on this hardware
+(MicroPython 1.29.0, Pico 2 W); almost all of it is invisible to the host
+suite (CPython passes, the board dies). The killers, one line each:
 
-- `uasyncio.create_task` exists.
-- `uasyncio.ensure_future` does **not** exist.
-- `uasyncio.sleep_ms` exists; `uasyncio.sleep(seconds)` accepts fractions.
-- This build has no `sys.stdout` attribute. Do not capture output by assigning
-  `sys.stdout`; use callbacks or an injected `print` function instead.
-- The serial console may be silent, so **errors/warnings** are also written
-  to `/log.txt` (read it via the shell's `log` command, `telnet.py <ip> log 40`)
-  — see the **Logging policy** below for the rule of what may be file-logged at
-  all.
-- `bytes.decode()` / `str.encode()` take **no keyword args** in this build:
-  `b"HTTP/1.0 200 OK".decode(errors="replace")` raises
-  `function doesn't take keyword arguments`. Use a plain `.decode()` (HTTP
-  status lines are ASCII) — never pass `errors=` / `encoding=`.
-- **The `os` module has NO `path` attribute in this build** (verified
-  on-device 2026-10-07): `os.path.isdir(...)` dies with `AttributeError:
-  'module' object has no attribute 'path'` — CPython hosts never see this.
-  Episode: the 1.1.77 candidate was rejected because `main()` used
-  `os.path.isdir` (the AttributeError escaped an `except OSError`, and the
-  candidate-failure message is console-only — `/log.txt` stayed clean).
-  Probe with `os.stat(path)[0] & 0o40000` (S_IFDIR); `os.stat` is always
-  present. Pinned by `micropy-system/tests/test_autotest_runner.py`.
-- **`bytearray` has NO item deletion and NO `.clear()` in this build** (verified
-  on-device 2026-10-05): `del buf[:n]` raises `TypeError: 'bytearray' object
-  doesn't support item deletion` and `buf.clear()` raises `AttributeError:
-  'bytearray' object has no attribute 'clear'`. CPython allows both, so host
-  tests using them pass while the device fails. Consume with **slice rebinding**
-  (`buf = buf[n:]`, reassign `self._buf = bytearray()`). Episode 2026-10-05:
-  the OTGW driver's on-device selftest "timeouts" were actually the *fake
-  link's* `self._out.clear()` raising inside `_pump`'s except →
-  `ERR_DISCONNECTED`; the driver itself was fine.
-- The heap is **tight (~290 KB free** after boot with Wi-Fi + shell + control
-  loop running). Large allocations can fail with `[Errno 12] ENOMEM` even when
-  the total free looks sufficient (fragmentation). `gc.collect()` before a
-  large read/parse, and **stream** large payloads instead of accumulating them.
-- **All elapsed-time arithmetic goes through signed uint32 tick diffs, never
-  raw `ticks_ms()` subtraction.** Use `time.ticks_diff` or the app's
-  `control.util.elapsed_ms` (same semantics; clamp where a negative elapsed
-  is impossible). The 32-bit tick counter wraps (~49.7 days of uptime) and a
-  raw subtraction flips sign at the wrap -- silently disabling poll intervals
-  and staleness guards. Episode 2026-10-05: fixed in `556b9df`; pinned by
-  `tests/test_time_wrap.py`.
-- **`/log.txt` timestamps are not wall-clock time.** The rp2 clock has no
-  RTC/NTP: each line's leading number is an epoch-style value starting at
-  ~1609459200 (2021-01-01 00:00 UTC) plus uptime seconds. Use `status`'s
-  `uptime_s` for elapsed time; log timestamps only order events relative to
-  each other.
-- **A same-named directory shadows a same-named module — even when empty.**
-  If `sensors/` and `sensors.py` both exist in one directory on the device,
-  `import sensors` resolves to the *directory* (a package), and
-  `from sensors import make_sensor_source` dies with `ImportError: no module
-  named 'sensors.make_sensor_source'`. CPython does the opposite (a plain
-  module beats a namespace dir without `__init__.py`), so the whole host
-  suite passes and only the device crashes. Episode 2026-10-03: stray empty
-  `app/sensors/` + `app/ui/` dirs (editor-created; git cannot track empty
-  dirs) were copied into the slot by `assemble.py` (it copies the working
-  tree, not git) and the app died in `main()` on every boot — the
-  diagnostic signature was: boot → OTA check (Wi-Fi up, board answers
-  **one ping**) → crash/reset loop, shell never comes up, REPL alive, no
-  ERROR in `/log.txt` (the ImportError is raised in the app, console-only).
-  Fix was deleting the dirs (`rmdir app/sensors app/ui`) and re-provisioning.
-  Never ship a dir and a module with the same name; after editor tooling
-  runs, check `app/` for stray empty dirs before assembling.
-- **When the shell is down, the REPL is usually alive — use it as the
-  definitive on-device repro.** A board that answers one ping but never
-  serves the shell (boot → OTA check → crash/reset loop) still answers
-  Ctrl-C on the CP2102N port with `>>>` (no `KeyboardInterrupt` line = the
-  script already ended, the app was not running). Run the launcher steps
-  manually over `mpremote exec` (fresh interpreter state per script — import
-  everything yourself): `sys.path.insert(0, 'apps/a')` → `import app_entry`
-  → `slot_manager.prepare_slot_boot()` → `post.run_post(app_entry)` →
-  `uasyncio.run(app_entry.main())`. If `main()` returns within seconds it
-  RAISED (or returned — both kill the boot) and the message names the
-  culprit (e.g. `ImportError: no module named 'sensors.make_sensor_source'`).
-  Note `mpremote cat`/`fs` also work in this state, so `/log.txt` can be
-  read even when the shell never comes up.
+- `os` has **NO `path` attribute**: probe dirs with `os.stat(p)[0] & 0o40000`
+  (S_IFDIR); `os.path.isdir` raises AttributeError (killed the 1.1.77
+  candidate).
+- `bytearray`: **no item deletion, no `.clear()`** — consume by slice
+  rebinding (`buf = buf[n:]`).
+- `bytes.decode()` / `str.encode()`: **no keyword args** (no `errors=`).
+- No `sys.stdout` attribute; `uasyncio.ensure_future` does **not** exist
+  (`create_task` does).
+- A coroutine has **NO `__await__`** on-device — detect via
+  `send`/`throw`/`__next__`, never `hasattr(x, "__await__")`.
+- Never subtract raw `ticks_ms()` — use `time.ticks_diff` /
+  `control.util.elapsed_ms` (the counter wraps at ~49.7 days).
+- Heap is **~290 KB and fragments**: `gc.collect()` before large parses,
+  stream large payloads, keep per-poll RAM O(1).
+- A same-named **directory shadows a module** (even when empty) — check
+  `app/` for stray empty dirs before assembling (`assemble.py` copies the
+  working tree, not git).
+- `/log.txt` timestamps are **uptime-based**, not wall-clock; the serial
+  console may be silent and candidate-slot failures are console-only —
+  risky app sections must `warn(...)` (file) to be diagnosable over the
+  network.
 
 ## Logging policy (flash-wear constrained — a microcontroller, not a Linux PC)
 
@@ -354,45 +304,17 @@ file-logged) + `status` + the serial console, not the heartbeat.
 ## On-device quirks (verified live; host tests can't catch these)
 
 The host unit tests inject a **fake `http_post`**, so the real async CCU3
-client (`app/ccu3.py`) only runs on the device. MicroPython-specific failures
-therefore surface **only live** — the `bytes.decode(errors=...)` keyword-arg
-error and the ENOMEM above both passed every host test. **Always validate new
-network code on the device** (`telnet.py <ip> log`), not just the host suite.
+client (`app/ccu3.py`) only runs on the device. MicroPython-specific
+failures therefore surface **only live** — every such failure so far
+(decode kwargs, ENOMEM, missing `os.path`) passed the full host suite
+first. **Always validate new network code on the device**
+(`telnet.py <ip> log`), not just the host suite.
 
-Other live-only behaviors (do not "fix" them into regressions):
-
-- **A MicroPython `async def` result has NO `__await__`.** It is a plain
-  generator (`send`/`throw`/`__next__` only), so the CPython idiom
-  `hasattr(x, "__await__")` to detect a coroutine is **False on-device** —
-  the object is silently treated as a value. Episode 2026-10-04 (twice):
-  the shell's async-handler dispatch printed `<generator object ...>` as the
-  command output, and the autotest runner **vacuously passed every async
-  test** (the tell: 24 ms "passes" for tests doing multi-second CCU3 I/O).
-  Detect with `hasattr(x, "__await__") or (hasattr(x, "send") and
-  hasattr(x, "throw") and hasattr(x, "__next__"))` (both fixed in
-  `telnet_service.py` + `autotest.py`; host tests pin the predicate).
-- **The CCU3 caps concurrent JSON-RPC sessions.** One `Session.login` per
-  test exhausted the pool; every subsequent login failed with `invalid
-  credentials or too many sessions` until idle sessions expired (minutes).
-  On-device CCU3 suites must share ONE session and login with backoff. The
-  board's own app sessions count against the same pool. The pattern that
-  works (autotests/ccu3_live_session.py): suites import a HELPER module for
-  the pooled session — the runner re-imports test_* modules per run but
-  NOT plain helpers, so the pool survives consecutive runs within one boot;
-  a suite-local collector borrows it via `mine._rpc = await get_rpc()`.
-- **`mpremote fs cp` needs the `:` prefix for remote ABSOLUTE paths**
-  (`:...autotest.py :/lib/coresys/autotest.py`); without it mpremote treats
-  the target as local and dies with `No such file or directory`. Same for
-  `fs ls`/`fs mkdir`.
-- **Wi-Fi startup race:** a periodic task that does network I/O fires on its
-  first tick before Wi-Fi is up → `[Errno 113] EHOSTUNREACH`. Expected on the
-  first tick after boot; the next interval retries and succeeds. A `rooms`/
-  weather poll failing once at boot is **not** a network fault.
-- **Deploy reboot can race the OTA server / board network:** if `deploy.py`
-  reboots the board and it comes back on the *old* version (didn't promote),
-  the first boot ran its OTA check before the update server / board network
-  were ready. A **second manual `reboot` over the shell** usually promotes on
-  the next boot. Retry once before concluding the OTA failed.
+The full live-only catalog lives in **`MICROPYTHON-GOTCHAS.md`** (CCU3
+JSON-RPC session cap + the pooled-session autotest pattern, the Wi-Fi
+startup race, deploy/OTA boot races, the one-client shell, REPL-as-repro
+when the shell is down, Pico-vs-CCU3 RPC latency, mpremote path prefixes).
+Those behaviors are verified — do not "fix" them into regressions.
 
 ## CCU3 / Homematic data reference (READ THIS before touching sensor data)
 
@@ -665,5 +587,7 @@ Consequences for this codebase (do not "fix" them away):
   Episode pinned on the way: this build's `os` has no `.path` (rejected
   1.1.77 candidate; see runtime facts).
 
-See `pico-standalone-architecture.md` for the target architecture and
+See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
+device-only pitfalls (read before writing firmware code),
+`pico-standalone-architecture.md` for the target architecture and
 `PLAN.md` for the current implementation plan.
