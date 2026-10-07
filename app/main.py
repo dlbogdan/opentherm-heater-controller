@@ -228,7 +228,8 @@ async def main():
     # connect -- no failing I/O, no full-interval dead wait.
     from rooms import make_rooms_source
     rooms = make_rooms_source(config, log=log, warn=warn)
-    LIVE.update(transport=transport, rooms=rooms, controller=controller)
+    LIVE.update(transport=transport, rooms=rooms, controller=controller,
+                sensor_source=sensor_source)
     # Demand P-term + gate (controller step 4): enabled from config when a
     # room source exists to feed it. A missing reading is still the defined
     # "no sensor" input inside the controller, so this can never strand the

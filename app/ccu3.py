@@ -261,14 +261,37 @@ class Ccu3SensorSource:
                 await self._discover()
             iface, addr = self._endpoint
             t_out = await self._get_value(iface, addr, "ACTUAL_TEMPERATURE")
-            lux = await self._get_value(iface, addr, "ILLUMINATION")
-            self._values = (t_out, lux, now)
-            if self._log:
+            lux_raw = await self._get_value(iface, addr, "ILLUMINATION")
+            lux = lux_raw
+            if lux_raw is not None:
+                # Blueprint parity (boiler_weather_compensation.yaml:369):
+                # the solar accumulator consumes the EFFECTIVE lux,
+                # lux = round(lux_raw * lux_mult), and control/solar_accum.py
+                # documents the multiplier as applied HERE, at the sensor
+                # source layer. (2026-10-07: it was never applied anywhere --
+                # the board's production calibration is lux_mult 1.4, so the
+                # solar offset ran ~40% under-calibrated; PLAN.md P1.)
+                mult = self._config.get("lux_mult")
+                mult = 1.0 if mult is None else float(mult)
+                lux = round(lux_raw * mult)
+                if self._log:
+                    self._log("CCU3: t_out=%s lux=%s (raw %s x%s)"
+                              % (t_out, lux, lux_raw, mult))
+            elif self._log:
                 self._log("CCU3: t_out=%s lux=%s" % (t_out, lux))
+            self._values = (t_out, lux, now)
         except Exception as exc:
             if self._warn:
                 self._warn("CCU3: poll failed (keeping last value if any): %s"
                            % exc)
+
+    def last(self):
+        """Most recent ``(t_out, lux, ts_ms)`` or None (diagnostics/tests).
+
+        The lux here is the EFFECTIVE (calibrated) value -- what the
+        controller actually consumes.
+        """
+        return self._values
 
     async def _get_value(self, iface, addr, key):
         result = await self._rpc.call(

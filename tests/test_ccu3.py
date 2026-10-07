@@ -96,6 +96,7 @@ class FakeConfig:
             "ccu3_weather_type": "HmIP-SWO",
             "ccu3_poll_s": 60,
             "t_out_source": "auto",
+            "lux_mult": 1.0,
         }
         self.values.update(overrides)
 
@@ -142,6 +143,41 @@ class Ccu3SourceTests(unittest.TestCase):
     def test_poll_failure_with_no_value_reports_no_reading(self):
         source = self.make(fail_post)
         self.assertEqual(run(source.read()), (None, None, None))
+
+    # -- lux_mult calibration (PLAN.md P1, blueprint parity) -----------------
+    # The HA blueprint computes lux = round(lux_raw * lux_mult) BEFORE the
+    # solar math (boiler_weather_compensation.yaml:369) and the board's
+    # production calibration is lux_mult 1.4. The multiplier is applied at
+    # the sensor-source layer (control/solar_accum.py docstring) -- these
+    # pins are what keeps it from silently going dead again.
+
+    def test_lux_mult_calibration_applied_at_the_source(self):
+        fake = FakeCcu3()  # ILLUMINATION = 12000
+        source = self.make_with(fake, lux_mult=1.4)
+        _t, lux, _d = run(source.read())
+        self.assertEqual(lux, 16800)  # round(12000 * 1.4)
+
+    def test_lux_mult_default_is_transparent(self):
+        source = self.make(FakeCcu3())  # FakeConfig default lux_mult 1.0
+        _t, lux, _d = run(source.read())
+        self.assertEqual(lux, 12000)
+
+    def test_lux_mult_zero_means_no_solar_gain(self):
+        source = self.make_with(FakeCcu3(), lux_mult=0)
+        _t, lux, _d = run(source.read())
+        self.assertEqual(lux, 0)  # 0 is a real calibration, not "missing"
+
+    def test_missing_lux_stays_missing_under_any_mult(self):
+        fake = FakeCcu3()
+        fake.weather["ILLUMINATION"] = ""  # unparseable -> no value
+        source = self.make_with(fake, lux_mult=1.4)
+        _t, lux, _d = run(source.read())
+        self.assertIsNone(lux)
+
+    def make_with(self, fake, **overrides):
+        return Ccu3SensorSource(
+            FakeConfig(**overrides), cache_path=self.cache, http_post=fake,
+            sleep=lambda _s: None)
 
     def test_recent_value_survives_poll_failure(self):
         import ccu3
