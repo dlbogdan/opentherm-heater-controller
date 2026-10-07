@@ -38,7 +38,7 @@ try:
 except ImportError:  # CPython host tests
     gc = None
 
-from ccu3 import Ccu3Rpc, Ccu3Error, _now_ms
+from ccu3 import Ccu3Rpc, Ccu3Error, _now_ms, _diff_ms
 
 SETPOINT_KEY = "SET_POINT_TEMPERATURE"   # room setpoint (deg C)
 ACTUAL_KEY = "ACTUAL_TEMPERATURE"        # measured room temperature (deg C)
@@ -47,6 +47,11 @@ ACTUAL_KEY = "ACTUAL_TEMPERATURE"        # measured room temperature (deg C)
 # setpoints -- the ReGaHd delta script skips them when computing demand.
 SETPOINT_MIN_VALID = 5.0
 SETPOINT_MAX_VALID = 30.0
+
+# Retry backoff for a failed discovery (the same scale as
+# Ccu3SensorSource.STALE_LIMIT_S): after a failed full scan, retry at most
+# this often instead of re-scanning on every poll (PLAN.md P2).
+DISCOVERY_BACKOFF_S = 600
 
 
 def _is_heating(itype):
@@ -86,13 +91,29 @@ class HeatingGroups:
                             config.get("ccu3_pass"),
                             http_post=http_post, log=log, warn=warn)
         self._rooms = self._load_cache()  # list of {room_name, addr(s), iface}
+        self._discovery_failed_ms = None  # retry-backoff marker (see _discover)
         self._last = None  # most recent aggregate (for the sync `rooms` command)
 
     # -- one pass over all rooms, one at a time ------------------------------
+    def _discovery_in_backoff(self):
+        """True while inside the retry backoff after a failed discovery.
+
+        An unset marker means "never failed" (or a reboot / a successful
+        discovery cleared it) -> attempt normally.
+        """
+        if self._discovery_failed_ms is None:
+            return False
+        return (_diff_ms(_now_ms(), self._discovery_failed_ms)
+                < DISCOVERY_BACKOFF_S * 1000)
+
     async def read(self):
         """Full pass; returns a compact O(1) aggregate (None for empty)."""
         if self._rooms is None:
-            await self._discover()
+            if not self._discovery_in_backoff():
+                await self._discover()
+            # Backoff after a failed discovery (PLAN.md P2): skip the
+            # ~50-device scan and do an empty pass -- demand_pct stays
+            # None (the defined "no sensor" input) until the next attempt.
         rooms = self._rooms or []
 
         total = len(rooms)
@@ -210,6 +231,7 @@ class HeatingGroups:
             try:
                 self._rooms = await self._build_rooms()
                 self._save_cache(self._mode, self._rooms)
+                self._discovery_failed_ms = None  # success clears backoff
                 if self._log:
                     self._log("Rooms: %d active rooms (%s)"
                               % (len(self._rooms), self._mode))
@@ -221,6 +243,7 @@ class HeatingGroups:
                 if attempt < 2:
                     await asyncio.sleep(0.5 * (2 ** attempt))
         self._rooms = None
+        self._discovery_failed_ms = _now_ms()  # backoff until the next poll
         if self._warn:
             self._warn("Rooms: discovery failed: %s" % last_error)
 

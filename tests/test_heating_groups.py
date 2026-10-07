@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
 from heating_groups import HeatingGroups  # noqa: E402
+import heating_groups  # noqa: E402  (module-level patch targets below)
 
 
 def run(coro):
@@ -158,6 +159,89 @@ class RoomModelTests(unittest.TestCase):
         run(self.make(fake2).read())
         self.assertNotIn("Device.listAll", fake2.methods)
         self.assertNotIn("Room.listAll", fake2.methods)
+
+
+class FakeClock:
+    """Controllable ``_now_ms`` substitute (module-patched in the tests below)."""
+
+    def __init__(self, start_ms=1000000):
+        self.now = start_ms
+
+    def __call__(self):
+        return self.now
+
+    def advance_s(self, seconds):
+        self.now += int(seconds * 1000)
+
+
+class _NoopSleep:
+    """Stands in for the module's asyncio (only its .sleep is used here)."""
+
+    @staticmethod
+    async def sleep(_seconds):
+        return None
+
+
+class FailingCcu3:
+    """Transport-level failure on every call (counts the attempts)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self, url, body):
+        self.calls += 1
+        raise OSError("connection refused")
+
+
+class DiscoveryBackoffTests(unittest.TestCase):
+    """P2: a failed discovery must back off instead of re-running the full
+    scan on every poll (the same ~50-device storm as the weather source;
+    rooms is isolated from the control tick but NOT bounded without this)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cache = str(Path(self.tmp.name) / "ccu3_rooms_cache.json")
+        self.clock = FakeClock()
+        saved_clock = heating_groups._now_ms
+        saved_asyncio = heating_groups.asyncio
+        heating_groups._now_ms = self.clock
+        heating_groups.asyncio = _NoopSleep()
+        self.addCleanup(lambda: setattr(heating_groups, "_now_ms",
+                                        saved_clock))
+        self.addCleanup(lambda: setattr(heating_groups, "asyncio",
+                                        saved_asyncio))
+
+    def make(self, post):
+        return HeatingGroups(FakeConfig(), cache_path=self.cache,
+                             http_post=post)
+
+    def test_failed_discovery_backs_off_instead_of_re_scanning(self):
+        post = FailingCcu3()
+        rooms = self.make(post)
+        run(rooms.read())  # first read: 3-attempt scan, then fails
+        self.assertGreaterEqual(post.calls, 3)
+        self.assertIsNone(rooms._rooms)
+        calls_after_first = post.calls
+        # Inside the backoff window: zero new RPC calls, empty pass.
+        agg = run(rooms.read())
+        self.assertEqual(post.calls, calls_after_first)
+        self.assertIsNone(agg["demand_pct"])
+        # After the window elapses: one more attempt cycle.
+        self.clock.advance_s(heating_groups.DISCOVERY_BACKOFF_S + 1)
+        run(rooms.read())
+        self.assertGreater(post.calls, calls_after_first)
+
+    def test_successful_discovery_clears_the_marker(self):
+        post = FailingCcu3()
+        rooms = self.make(post)
+        run(rooms.read())  # fails -> backoff marker set
+        self.assertIsNotNone(rooms._discovery_failed_ms)
+        self.clock.advance_s(heating_groups.DISCOVERY_BACKOFF_S + 1)
+        rooms._rpc._post = FakeCcu3()  # the CCU3 recovers
+        agg = run(rooms.read())
+        self.assertIsNotNone(agg["demand_pct"])
+        self.assertIsNone(rooms._discovery_failed_ms)  # success clears it
 
 
 if __name__ == "__main__":

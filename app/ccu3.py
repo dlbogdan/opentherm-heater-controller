@@ -231,6 +231,7 @@ class Ccu3SensorSource:
                             http_post=http_post, log=log, warn=warn)
         self._values = None  # (t_out, lux, ts_ms)
         self._endpoint = None  # (interface, address)
+        self._discovery_failed_ms = None  # retry-backoff marker (see _discover)
         cache = self._load_cache()
         if cache:
             self._endpoint = (cache["interface"], cache["address"])
@@ -255,9 +256,28 @@ class Ccu3SensorSource:
         return (t_out, lux, None)
 
     # -- polling -------------------------------------------------------------
+    def _discovery_in_backoff(self, now):
+        """True while inside the retry backoff after a failed discovery.
+
+        An unset marker means "never failed" (or a reboot / a successful
+        discovery cleared it) -> attempt normally.
+        """
+        if self._discovery_failed_ms is None:
+            return False
+        return (_diff_ms(now, self._discovery_failed_ms)
+                < self.STALE_LIMIT_S * 1000)
+
     async def _poll(self, now):
         try:
             if self._endpoint is None:
+                if self._discovery_in_backoff(now):
+                    # A failed discovery must not re-scan on every tick
+                    # (PLAN.md P2): the full ~50-device storm would degrade
+                    # the control loop to one tick per ~7.5 min. Stay in
+                    # the no-reading state -- read() returns (None, None,
+                    # None) and the controller failsafes on t_out=None --
+                    # and retry the scan at most every STALE_LIMIT_S.
+                    return
                 await self._discover()
             iface, addr = self._endpoint
             t_out = await self._get_value(iface, addr, "ACTUAL_TEMPERATURE")
@@ -327,6 +347,7 @@ class Ccu3SensorSource:
                     addr = device.get("address")
                     if iface and addr:
                         self._endpoint = (iface, addr)
+                        self._discovery_failed_ms = None  # success clears backoff
                         self._save_cache(iface, addr)
                         if self._log:
                             self._log("CCU3: discovered %s at %s (%s)"
@@ -337,6 +358,7 @@ class Ccu3SensorSource:
                 last_error = exc
                 if attempt < 2:
                     await self._sleep(0.5 * (2 ** attempt))
+        self._discovery_failed_ms = _now_ms()  # backoff until the next try
         raise Ccu3Error("discovery failed: %s" % last_error)
 
     # -- flash cache (discovery result; written once, read at boot) ----------

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
 from ccu3 import Ccu3SensorSource  # noqa: E402
+import ccu3  # noqa: E402  (module-level patch target for _now_ms)
 from sensors import NullSensorSource, make_sensor_source  # noqa: E402
 
 
@@ -251,6 +252,74 @@ class MakeSourceTests(unittest.TestCase):
     def test_local_stays_null(self):
         source = make_sensor_source(FakeConfig(t_out_source="local"))
         self.assertIsInstance(source, NullSensorSource)
+
+
+class FakeClock:
+    """Controllable ``_now_ms`` substitute (module-patched in the tests below)."""
+
+    def __init__(self, start_ms=1000000):
+        self.now = start_ms
+
+    def __call__(self):
+        return self.now
+
+    def advance_s(self, seconds):
+        self.now += int(seconds * 1000)
+
+
+async def _noop_sleep(_seconds):
+    return None
+
+
+class DiscoveryBackoffTests(unittest.TestCase):
+    """P2: a failed discovery must back off instead of re-running the full
+    scan on every read (the ~50-device storm that used to degrade the
+    control tick to one tick per ~7.5 min)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cache = str(Path(self.tmp.name) / "ccu3_cache.json")
+        self.clock = FakeClock()
+        saved = ccu3._now_ms
+        ccu3._now_ms = self.clock
+        self.addCleanup(lambda: setattr(ccu3, "_now_ms", saved))
+
+    def make(self, fake):
+        return Ccu3SensorSource(
+            FakeConfig(), cache_path=self.cache, http_post=fake,
+            sleep=_noop_sleep)
+
+    def _no_weather(self):
+        fake = FakeCcu3()
+        fake.devices = [d for d in fake.devices if d["type"] != "HmIP-SWO"]
+        return fake
+
+    def test_failed_discovery_backs_off_instead_of_re_scanning(self):
+        fake = self._no_weather()
+        source = self.make(fake)
+        run(source.read())  # first read: full 3-attempt scan, then fails
+        self.assertEqual(fake.methods.count("Device.listAll"), 3)
+        self.assertEqual(run(source.read()), (None, None, None))
+        # Inside the backoff window: no scan at all, immediate no-reading.
+        self.assertIsNone(source._endpoint)
+        run(source.read())
+        self.assertEqual(fake.methods.count("Device.listAll"), 3)
+        # After the window elapses: exactly one more scan cycle.
+        self.clock.advance_s(Ccu3SensorSource.STALE_LIMIT_S + 1)
+        run(source.read())
+        self.assertEqual(fake.methods.count("Device.listAll"), 6)
+
+    def test_successful_discovery_clears_the_marker(self):
+        fake = self._no_weather()
+        source = self.make(fake)
+        run(source.read())  # fails -> backoff marker set
+        self.assertIsNotNone(source._discovery_failed_ms)
+        self.clock.advance_s(Ccu3SensorSource.STALE_LIMIT_S + 1)
+        source._rpc._post = FakeCcu3()  # the weather station is back
+        t_out, _lux, _ts = run(source.read())
+        self.assertIsNotNone(t_out)
+        self.assertIsNone(source._discovery_failed_ms)  # success clears it
 
 
 if __name__ == "__main__":

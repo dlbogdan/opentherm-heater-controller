@@ -319,7 +319,7 @@ class Stack:
     """The real pipeline: fake CCU3 -> sources -> controller -> transport."""
 
     def __init__(self, rooms, weather, **cfg_overrides):
-        self.tmp = tempfile.TemporaryDirectory()  # kept: no implicit cleanup
+        self.tmp = tempfile.TemporaryDirectory()
         self.fake = ProductionCcu3(rooms, weather)
         cfg = E2EConfig(**cfg_overrides)
         self.weather = Ccu3SensorSource(
@@ -333,6 +333,9 @@ class Stack:
         self.transport = LogTransport(DummyOTGW())
         self.state = _FakeState()
         self.params = dict(PRODUCTION)
+
+    def close(self):
+        self.tmp.cleanup()
 
     async def refresh_rooms(self):
         await self.rooms.read()
@@ -359,6 +362,9 @@ class FullStackDayTests(unittest.TestCase):
                            {"ACTUAL_TEMPERATURE": "2.0",
                             "ILLUMINATION": "0"})
         self.bp = BlueprintRef(PRODUCTION)
+
+    def tearDown(self):
+        self.stack.close()
 
     def compare(self, decision, bp, msg):
         """Firmware Decision vs blueprint debug dict, tick by tick."""
@@ -463,6 +469,7 @@ class FullStackDayTests(unittest.TestCase):
             self.assertEqual(st.weather.last()[1], want_lux)
             self.compare(d, bp.step(2.0, 30000.0, 10.476190476, 30.0),
                          "mult=%s" % mult)
+            st.close()
 
 
 class BlueprintMathTests(unittest.TestCase):

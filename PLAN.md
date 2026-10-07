@@ -43,27 +43,54 @@ the real sensor, pooled session) was OTA-delivered by the new
 `deploy.py --debug` flow (firmware 1.1.79) and **passed 3/3 on the
 production board**; full live set 24/24 green.**
 
-## P2 — Bound weather discovery; stop the control-tick discovery storm
+## P2 — Bound discovery retries in BOTH CCU3 sources (weather + rooms) — COMPLETE
 
-**Problem.** On a discovery cache miss with no matching weather device, every
-poll re-runs the full ~50-device scan (~2.5 min × 3 attempts) *inside*
-`control_tick` (`app/ccu3.py:258-261,285-317` awaited from `app/main.py:261`).
-Nothing caches the failure, so the control loop degrades to one tick per ~7
-min, permanently in failsafe heat (45 °C) re-asserted forever by the
-re-assert task. The rooms side already does this correctly (own task, failure
-caught internally).
+**Problem.** When a discovery cache miss keeps failing (no matching device,
+CCU3 RPC errors), each source re-runs the full ~50-device scan (~2.5 min × 3
+attempts) on EVERY failed read with no backoff:
 
-**Fix.** In `Ccu3SensorSource`: on `_discover` failure record
-`_discovery_failed_ms`; while `_diff_ms(_discovery_failed_ms, now)` is under a
-retry backoff (600 s; reuse the `STALE_LIMIT_S` scale), skip discovery and
-return the no-reading tuple. A successful discovery clears the marker. No new
-task, no new config key needed.
+- **Weather, inside the control tick:** `Ccu3SensorSource.read` → `_poll` →
+  `_discover` (ccu3.py:245-261, retry loop 308-340) is awaited from
+  `control_tick` (main.py:296). Nothing records the failure, so with no
+  reading ever cached the control loop degrades to one tick per ~7.5 min
+  (worst case: CCU3 reachable but no HmIP-SWO), stuck in failsafe heat
+  (45 °C) re-asserted forever by the re-assert task. An unreachable CCU3
+  fails each attempt in seconds — a denser-but-shorter storm; both
+  directions degrade the tick cadence.
+- **Rooms, same defect (added by the 2026-10-07 accusation review):**
+  `HeatingGroups.read` (heating_groups.py:94-95) re-discovers on every
+  300 s poll after a failure sets `_rooms = None` (223) — full 3-attempt
+  scan plus a flash warn per attempt. Rooms IS isolated from the control
+  tick (own periodic task, contained, main.py:274-285), but the original
+  plan text's claim that rooms "already does this correctly" was only true
+  for isolation, not for retry bounding — it shares the bug this fixes.
+  (Same review: the pre-P1 line citations ccu3.py:285-317 / main.py:261 were
+  stale; the behavior they describe is confirmed against current code.)
 
-**Verify.** Host: fake `http_post` where every `Device.get` RPC errors → first
-`read()` returns `(None, None, None)` after the bounded retries; the next
-`read()` inside the backoff window returns immediately with no scan (count the
-posts). Device: on-device autotest suite (do NOT break the live board's
-cached endpoint to test this).
+**Fix.** Same shape in both sources: on `_discover` failure record
+`_discovery_failed_ms`; while under the retry backoff (600 s — the
+`STALE_LIMIT_S` scale), skip the scan and stay in the no-reading state
+(weather: `(None, None, None)` via unchanged `_values`; rooms: empty pass,
+`demand_pct` None). The first attempt always runs (marker starts unset); a
+successful discovery clears the marker. The marker is RAM-only (a reboot =
+fresh attempt). No new task, no new config key.
+
+**Verify.** Host (both): fake `http_post` where every `Device.get` RPC
+errors → first `read()` does the bounded 3-attempt retries; `read()`s
+inside the backoff window return with NO scan (count the posts); once the
+window elapses (fake clock), exactly one more scan runs; a successful
+discovery clears the marker. Device: `deploy.py --debug`, live suites
+green; do NOT break the live board's cached endpoint to test this (the
+backoff path is host-pinned).
+
+**Done (firmware 1.1.80, 2026-10-07).** `_discovery_failed_ms` marker +
+`_discovery_in_backoff()` in both sources (ccu3.py, heating_groups.py;
+backoff = `STALE_LIMIT_S` / `DISCOVERY_BACKOFF_S`, 600 s). Host: 4 new pins
+in `tests/test_ccu3.py` + `tests/test_heating_groups.py` (no scan inside the
+window — post-counted; exactly one more scan after the window; success
+clears the marker); also fixed 8 pre-existing `TemporaryDirectory` leaks in
+`tests/test_pipeline_e2e.py` (ResourceWarnings). Device: 1.1.80 promoted,
+selftest 37/37, live suites 24/24, heap healthy.
 
 ## P3 — Make control-tick failures visible (boiler-pinning blind spot)
 
