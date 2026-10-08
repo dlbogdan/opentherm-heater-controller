@@ -400,18 +400,37 @@ MicroPython per-connection overhead; the CCU3 sends no `Content-Length`, so
 the body is read until the server closes). A full 8-room `rooms` pass is ~47s
 of I/O.
 
-**Production calibration (live board values, 2026-10-05):** the board's
-persisted `/app-config.json` (and the local provisioning `app-config.json`)
-deliberately differs from `app/config.py` DEFAULTS -- it mirrors the tuned
-Home Assistant blueprint automation that drives the boiler today:
-`t_design -30, t_on 19, t_off 23, lux_mult 1.4, min_change 1,
-demand_neutral 0, demand_rate 3.8, demand_exponent 0.35`. HA's demand input
-was a CCU3 ReGaHk script (`heating-demand-calculation.ccu3script`, committed
-at the repo root as provenance) whose recipe the firmware now reproduces 1:1
-in `heating_groups.py`; the script is to be deleted from the CCU3 once the
-board takes over actuation. Do not "fix" the board's config back to the
-shipped defaults -- the shipped defaults are the blueprint's documented
-defaults, not the house's calibration.
+**Production calibration (live board values, synced 2026-10-08):** the
+board's persisted `/app-config.json` (and the local provisioning
+`app-config.json`, which mirrors it) deliberately differs from
+`app/config.py` DEFAULTS -- it mirrors the tuned Home Assistant blueprint
+automation that drives the boiler today. **The HA blueprint is the source of
+truth for these values; whenever its variables change, re-sync the board
+(`config set` over the shell takes effect on the next control tick, no
+reboot) and the local provisioning copy.** The 2026-10-08 full sync (values
+confirmed live on the board): `t_design -20, curve_base 29, flow_design 60,
+b 0.75, t_on 19, t_off 23, lux_mult 1.4, min_change 1, demand_neutral 0,
+demand_rate 3.8, demand_exponent 0.35, lux_low 8000, solar_charge 0.2,
+lux_max_offset 8, flow_min 35, flow_min_on 39, demand_max_p_offset 11`.
+HA's demand input was a CCU3 ReGaHk script (`heating-demand-calculation.ccu3script`,
+committed at the repo root as provenance) whose recipe the firmware now
+reproduces 1:1 in `heating_groups.py`; the script is to be deleted from the
+CCU3 once the board takes over actuation. Do not "fix" the board's config
+back to the shipped defaults -- the shipped defaults are the blueprint's
+documented defaults, not the house's calibration.
+
+**Why the sync matters (2026-10-08 episode, verified live):** the original
+2026-10-05 calibration had mirrored only a subset of keys (the
+demand/hysteresis/lux-mult cluster plus `t_design -30`); the heat-curve shape
+(`curve_base`/`flow_design`/`b`) stayed at shipped defaults, while HA's
+blueprint carried a retuned curve (`29/60/0.75`, `t_design` back at -20).
+Result: the two heat curves crossed at t_out ≈ 12 °C and everywhere below it
+the board ran hotter (base_flow 44.9 vs 43.4 at 7.5 °C → simulated setpoint
+45 vs HA's 43, up to +17 °C near design day). The board was in
+`otgw_dummy` mode, so the divergence showed up as "the simulation is ~2 °C
+high", not as real overheating. After the full sync, board and HA compute
+identical targets (both 44 at the then-live inputs) -- same pipeline math,
+same parameters.
 
 The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
 `asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so
