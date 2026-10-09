@@ -330,6 +330,16 @@ PROGRESS -- what follows might not represent real events` / `Autotests:
 testing ended` (`AutotestMarkerShell` in `shell_commands.py`, wrapped around
 the runner registration in `main.py`; host-pinned + verified live).
 
+Addendum 2 (fw 1.1.97, owner request): `/app-config.json` reorganized from
+the single `CONTROL` blob into six semantic sections (`HEATING_PARAMS`,
+`SENSORS_CONFIG` incl. ALL cadences + `demand_delta_cap`, `SENSORS_CONNECTION`
+for per-backend credentials, `BOILER`, `MQTT`, `SHELL`). Schema + defaults +
+key->section map + one-time migration live in the new framework-free
+`app/config_schema.py`; keys stay globally unique (flat `get/set/reset`
+unchanged), listings grouped via `config list [SECTION]`. Legacy `CONTROL`
+values migrate (calibration preserved -- verified live) and the section is
+deleted. Both JSON config files rewritten to the new layout.
+
 
 - **New `room_source` value `"heating_groups+etrvs"`**: per room, use the
   HEATING group if present, else that room's eTRV average; a room with both

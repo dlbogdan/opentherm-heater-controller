@@ -43,17 +43,9 @@ def params(**overrides):
 
 class ConfigDefaultsTests(unittest.TestCase):
     def test_demand_enabled_key_exists_and_defaults_on(self):
-        # Import-lite: read DEFAULTS without the framework logger stack.
-        import ast
-        src = (ROOT / "app" / "config.py").read_text()
-        tree = ast.parse(src)
-        defaults = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for t in node.targets:
-                    if isinstance(t, ast.Name) and t.id == "DEFAULTS":
-                        defaults = ast.literal_eval(node.value)
-        self.assertIsNotNone(defaults)
+        # config_schema is framework-free: import the real DEFAULTS directly
+        # (no AST scraping of config.py needed).
+        from config_schema import DEFAULTS as defaults
         self.assertIn("demand_enabled", defaults)
         self.assertIs(defaults["demand_enabled"], True)
         self.assertEqual(defaults["demand_neutral"], 3)  # percent scale

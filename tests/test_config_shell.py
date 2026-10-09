@@ -1,7 +1,8 @@
 """Host tests for the over-the-air ``config`` shell command (app/shell_commands.py).
 
 A fake ``Config`` stands in for the framework-backed one so the handler logic
-(type coercion, validation, rejection, persistence) runs on a host.
+(type coercion, validation, rejection, persistence, section grouping, secret
+masking) runs on a host.
 """
 
 import json
@@ -25,7 +26,7 @@ class FakeConfig:
             "b": 0.78,               # float
             "net_port": 23,          # int
             "mqtt_enabled": False,   # bool
-            "transport": "otgw_dummy",  # str, allowed: otgw_dummy|otgw_uart|direct_ot_dummy
+            "transport": "otgw_dummy",  # str, allowed: otgw_dummy|direct_ot_dummy
             "ccu3_url": "http://10.9.30.10/api/homematic.cgi",  # str
             # Secret-shaped keys (the masking rule is suffix-based, so a new
             # *_pass / *_token / *_secret key is masked automatically).
@@ -33,7 +34,20 @@ class FakeConfig:
             "mqtt_pass": "",
             "api_token": "",
         }
+        # Mirrors the real Config.sections grouping (every default exactly
+        # once -- the handler groups listings with this map).
+        self._sections = {
+            "HEATING_PARAMS": ["t_on", "t_off", "b"],
+            "SENSORS_CONNECTION": ["ccu3_url", "ccu3_pass", "api_token"],
+            "BOILER": ["transport"],
+            "MQTT": ["mqtt_enabled", "mqtt_pass"],
+            "SHELL": ["net_port"],
+        }
         self._values = {}
+
+    @property
+    def sections(self):
+        return self._sections
 
     def get(self, key):
         if key not in self.defaults:
@@ -64,14 +78,28 @@ class ConfigHandlerTests(unittest.TestCase):
         self.config = FakeConfig()
         self.handle = make_config_handler(self.config)
 
-    def test_list_returns_all(self):
+    def test_list_returns_all_grouped_by_section(self):
         data = json.loads(self.handle("list"))
-        self.assertEqual(data["t_on"], 13.0)
-        self.assertEqual(data["net_port"], 23)
+        self.assertEqual(data["HEATING_PARAMS"]["t_on"], 13.0)
+        self.assertEqual(data["SHELL"]["net_port"], 23)
+        self.assertEqual(set(data), set(self.config.sections))
 
     def test_bare_command_defaults_to_list(self):
         self.assertEqual(json.loads(self.handle("")),
                          json.loads(self.handle("list")))
+
+    def test_list_single_section(self):
+        data = json.loads(self.handle("list HEATING_PARAMS"))
+        self.assertEqual(data, {"t_on": 13.0, "t_off": 18.0, "b": 0.78})
+
+    def test_list_section_is_case_insensitive(self):
+        self.assertEqual(json.loads(self.handle("list shell")),
+                         {"net_port": 23})
+
+    def test_list_unknown_section(self):
+        response = self.handle("list NOPE")
+        self.assertIn("unknown section: NOPE", response)
+        self.assertIn("HEATING_PARAMS", response)  # lists the valid ones
 
     def test_get_single_key(self):
         data = json.loads(self.handle("get t_on"))
@@ -124,9 +152,12 @@ class ConfigHandlerTests(unittest.TestCase):
         self.assertIn("OK: t_on reset to 13.0", self.handle("reset t_on"))
         self.assertEqual(self.config.get("t_on"), 13.0)
 
-    def test_defaults_dumps_shipped_defaults(self):
+    def test_defaults_dumps_shipped_defaults_grouped(self):
         data = json.loads(self.handle("defaults"))
-        self.assertEqual(data, self.config.defaults)
+        self.assertEqual(data["HEATING_PARAMS"],
+                         {"t_on": 13.0, "t_off": 18.0, "b": 0.78})
+        flat = dict((k, v) for group in data.values() for k, v in group.items())
+        self.assertEqual(flat, self.config.defaults)
 
     # --- secret masking (the telnet shell is unauthenticated on the LAN) ---
 
@@ -134,14 +165,19 @@ class ConfigHandlerTests(unittest.TestCase):
         self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
         self.config.set("mqtt_pass", "hunter2")
         data = json.loads(self.handle("list"))
-        self.assertEqual(data["ccu3_pass"], "***")
-        self.assertEqual(data["mqtt_pass"], "***")
+        self.assertEqual(data["SENSORS_CONNECTION"]["ccu3_pass"], "***")
+        self.assertEqual(data["MQTT"]["mqtt_pass"], "***")
         # The real value stays in the backing config (UI/tests read it).
         self.assertEqual(self.config.get("ccu3_pass"), "REDACTED-CCU3-PASS")
 
     def test_unset_secret_shows_empty_not_star(self):
         data = json.loads(self.handle("list"))
-        self.assertEqual(data["ccu3_pass"], "")
+        self.assertEqual(data["SENSORS_CONNECTION"]["ccu3_pass"], "")
+
+    def test_list_section_masks_its_secrets(self):
+        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        data = json.loads(self.handle("list SENSORS_CONNECTION"))
+        self.assertEqual(data["ccu3_pass"], "***")
 
     def test_get_single_secret_masked(self):
         self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")

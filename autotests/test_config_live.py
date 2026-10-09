@@ -38,6 +38,30 @@ class TestConfigInvariants(unittest.TestCase):
                       ("otgw_dummy", "otgw_uart", "direct_ot_dummy"))
 
 
+class TestConfigSections(unittest.TestCase):
+    """The sectioned /app-config.json layout (post-migration invariant)."""
+
+    def _raw(self):
+        with open("/app-config.json") as handle:
+            return json.load(handle)
+
+    def test_file_is_sectioned_and_legacy_control_gone(self):
+        data = self._raw()
+        self.assertNotIn("CONTROL", data, "legacy section must be dropped")
+        for section in ("HEATING_PARAMS", "SENSORS_CONFIG",
+                        "SENSORS_CONNECTION", "BOILER", "MQTT", "SHELL"):
+            self.assertIn(section, data)
+
+    def test_every_schema_key_is_persisted_in_its_section(self):
+        # Boot validate() seeds every missing key, so a healthy board has
+        # the full schema in the file, each key under its schema section.
+        data = self._raw()
+        for section, keys in config.sections.items():
+            for key in keys:
+                self.assertIn(key, data.get(section, {}),
+                              "%s.%s" % (section, key))
+
+
 class TestState(unittest.TestCase):
     def test_state_file_matches_singleton(self):
         # /state.json agrees with the in-memory heating latch (the file may

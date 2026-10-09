@@ -356,6 +356,23 @@ Those behaviors are verified — do not "fix" them into regressions.
   empty on purpose, and an empty `ccu3_url` simply disables the CCU3 sources
   (demand off, weather failsafe).
 
+**`/app-config.json` is SECTIONED (2026-10-09):** the file's top-level keys
+are semantic sections -- `HEATING_PARAMS` (curve/limits/hysteresis/solar/
+demand P-term/manual+tick), `SENSORS_CONFIG` (source selection + ALL cadences
++ `sensor_cache_s` + `demand_delta_cap`), `SENSORS_CONNECTION` (per-backend
+endpoint/credentials/device-type: `ccu3_*` today, a future BLE/MQTT backend
+adds its own prefixed keys), `BOILER` (transport + OTGW link), `MQTT`,
+`SHELL` (`net_*`). The layout + defaults + key->section map live in the
+framework-free **`app/config_schema.py`** (single source of truth,
+host-tested); `config.py` wraps it. Keys are GLOBALLY UNIQUE, so every call
+site and the shell keep the flat API (`config get t_on`); only listings are
+grouped (`config list [SECTION]`). A pre-sections board (everything under
+the legacy `CONTROL`) is migrated ONCE at `Config` construction: tuned
+values move to their sections (the HA calibration survives -- verified live),
+unknown keys are dropped, `CONTROL` is deleted. Do not re-add a `CONTROL`
+section or move keys between sections without updating `config_schema.py`
+(the migration + both JSON files + the autotest pins key off it).
+
 **Auth (per RPC session):**
 1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
 2. Every subsequent call carries `"_session_id_": <id>` inside `params`.
@@ -736,6 +753,17 @@ Consequences for this codebase (do not "fix" them away):
   unmistakably test evidence. Verified live: `test run control_net` logged
   start marker -> sentinel `Control: tick failed: control-net live demo` ->
   end marker; `test list` logged nothing. Host suite 208 green.
+- Sectioned `/app-config.json` (firmware 1.1.97): six semantic sections
+  (`HEATING_PARAMS`, `SENSORS_CONFIG`, `SENSORS_CONNECTION`, `BOILER`,
+  `MQTT`, `SHELL`) defined in the new framework-free `app/config_schema.py`
+  (defaults + key->section map + one-time legacy `CONTROL` migration that
+  preserves tuned values and drops the legacy section). Keys stay globally
+  unique so `config get/set/reset` keep flat syntax; listings are grouped
+  (`config list [SECTION]`). Live: migration preserved the HA calibration
+  (t_on 19 / curve_base 29 / demand_rate 3.8), `config` grouped + masked,
+  autotest `test run config` 8/8 incl. new section-layout pins. Host suite
+  223 green. Local `app-config.json` + `app-config.example.json` rewritten
+  to the section layout.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

@@ -200,7 +200,8 @@ def register_transport_commands(shell, transport):
 
 # --------------------------------------------------------------------------- config
 
-CONFIG_USAGE = ("usage: config [get [KEY]|set KEY VALUE|reset KEY|list|defaults]")
+CONFIG_USAGE = ("usage: config [get [KEY]|set KEY VALUE|reset KEY|"
+                "list [SECTION]|defaults]")
 
 
 def _coerce(default, raw):
@@ -249,8 +250,16 @@ def _shown(key, value):
     return "***" if value else ""
 
 
-def _mask_secrets(values):
-    return dict((k, _shown(k, v)) for k, v in values.items())
+def _grouped(config, values):
+    """Mask + group a flat key->value snapshot by config section.
+
+    The section order comes from ``config.sections`` (the schema), so the
+    shell listing reads in the same domain order as the file and the docs.
+    """
+    out = {}
+    for section, keys in config.sections.items():
+        out[section] = dict((k, _shown(k, values[k])) for k in keys)
+    return out
 
 
 def make_config_handler(config):
@@ -260,9 +269,13 @@ def make_config_handler(config):
     notifies live subscribers), then runs ``config.validate`` to self-heal:
     an out-of-range value is reported REJECTED and reset, a valid one OK.
 
-    Secret values are masked in every reply (see ``_mask_secrets``): the
-    telnet shell is unauthenticated on the LAN, so ``config`` must never put
-    a credential on the wire.
+    Listings (bare / ``list`` / ``defaults``) are GROUPED by config section
+    (HEATING_PARAMS, SENSORS_CONFIG, ...; ``list SECTION`` filters); keys stay
+    globally unique so ``get``/``set``/``reset`` keep the flat key syntax.
+
+    Secret values are masked in every reply (see ``_shown``): the telnet
+    shell is unauthenticated on the LAN, so ``config`` must never put a
+    credential on the wire.
     """
     defaults = config.defaults
 
@@ -271,9 +284,19 @@ def make_config_handler(config):
         command = parts[0] if parts else "list"
 
         if command in ("list", "get") and len(parts) <= 1:
-            # Bare ``config`` / ``config list`` / ``config get`` -> all values
-            # (secrets masked -- the shell is unauthenticated on the LAN).
-            return json.dumps(_mask_secrets(config.all()))
+            # Bare ``config`` / ``config list`` / ``config get`` -> every
+            # value GROUPED by section (secrets masked -- the shell is
+            # unauthenticated on the LAN).
+            return json.dumps(_grouped(config, config.all()))
+
+        if command == "list" and len(parts) == 2:
+            section = parts[1].upper()
+            if section not in config.sections:
+                return "unknown section: %s (sections: %s)" % (
+                    parts[1], ", ".join(config.sections))
+            values = config.all()
+            return json.dumps(dict(
+                (k, _shown(k, values[k])) for k in config.sections[section]))
 
         if command == "get" and len(parts) == 2:
             key = parts[1]
@@ -309,7 +332,7 @@ def make_config_handler(config):
                 "" if not problems else " (repaired: %s)" % "; ".join(problems))
 
         if command == "defaults" and len(parts) == 1:
-            return json.dumps(_mask_secrets(defaults))
+            return json.dumps(_grouped(config, defaults))
 
         return CONFIG_USAGE
 
@@ -321,7 +344,8 @@ def register_config_commands(shell, config):
     shell.add(
         "config",
         make_config_handler(config),
-        "get [KEY]|set KEY VALUE|reset KEY|list|defaults",
+        "get [KEY]|set KEY VALUE|reset KEY|list [SECTION]|defaults "
+        "(grouped by section)",
     )
 
 

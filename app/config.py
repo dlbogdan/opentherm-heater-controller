@@ -1,161 +1,54 @@
 """App control configuration (Step 1).
 
-Owns the ~30 weather-compensation control parameters (arch §6). They live in the
-app's own ``/app-config.json`` -- separate from the framework's
+Owns the ~40 control / sensor / transport parameters (arch §6). They live in
+the app's own ``/app-config.json`` -- separate from the framework's
 ``/system-config.json`` (device / Wi-Fi / OTA) -- and are managed through the
-framework ``ConfigManager``
-for self-seeding defaults, persist-on-change, and subscribe/notify (the latter is
-what lets the button config UI live-update later).
+framework ``ConfigManager`` for self-seeding defaults, persist-on-change, and
+subscribe/notify (the latter is what lets the button config UI live-update
+later).
 
-``DEFAULTS`` here is the single source of truth for the control pipeline (Step 2)
-and the config UI. This module is device-only: it depends on the micropy-system
-framework. (The pure control core in ``control/`` stays framework-free so it can
-be unit-tested on a host.)
+Since 2026-10-09 the file is GROUPED into semantic sections (HEATING_PARAMS,
+SENSORS_CONFIG, SENSORS_CONNECTION, BOILER, MQTT, SHELL). The layout, the
+defaults and the key->section map live in the framework-free
+``config_schema`` module (host-testable, single source of truth). Keys stay
+globally unique, so every call site and the shell keep the flat
+``config.get("t_on")`` API -- only the file layout and the bare ``config``
+listing are grouped. A pre-sections board is migrated ONCE at construction:
+legacy ``CONTROL`` values move to their section (the tuned calibration is
+preserved), then the legacy section is dropped.
+
+This module is device-only: it depends on the micropy-system framework. (The
+pure schema in ``config_schema.py`` and the control core in ``control/`` stay
+framework-free so they can be unit-tested on a host.)
 """
 
 import lib.coresys.logger as logger
 from lib.coresys.manager_config import ConfigManager
 
+from config_schema import (DEFAULTS, KEY_SECTION, LEGACY_SECTION, SECTIONS,
+                           migrate_legacy)
+
 # App-owned runtime config (the file the app/user edits most). Named to pair
 # with the framework's /system-config.json; both live outside the A/B slots
 # so they survive OTA updates.
 CONFIG_FILE = "/app-config.json"
-SECTION = "CONTROL"
-
-# Defaults -- arch §6 / logic-spec §2. Single source of truth for the pipeline.
-DEFAULTS = {
-    # Heat curve
-    "t_design": -20,
-    "flow_design": 77,
-    "curve_base": 25,
-    "b": 0.78,
-    # Flow limits
-    "flow_min": 25,
-    "flow_min_on": 36,
-    "flow_max": 67,
-    # Outdoor temperature hysteresis
-    "t_off": 18.0,
-    "t_on": 13.0,
-    # Solar gain
-    "lux_low": 10000,
-    "lux_high": 40000,
-    "lux_max_offset": 5.0,
-    "solar_charge": 0.15,
-    "solar_halflife": 25,
-    "lux_mult": 1.0,
-    # Heating demand P-term (optional). When enabled AND a room source
-    # provides demand, ``demand_raw`` is the rooms aggregate ``demand_pct``
-    # in PERCENT (0..100, same scale as ``demand_neutral``). No room data
-    # (null source / before the first pass / CCU3 down) always behaves as
-    # "no sensor": zero offset, permissive gate -- never blocks heating.
-    "demand_enabled": True,
-    "demand_neutral": 3,
-    "demand_rate": 0.1,
-    "demand_exponent": 1.0,
-    "demand_max_p_offset": 10,
-    # Rate limiting
-    "min_change": 2,
-    # Sensor cache expiry (seconds) -- ONE expiry window for ALL sensor
-    # caches (weather + rooms; owner decision 2026-10-09). Within it, a
-    # source whose polls fail keeps steering the control loop on its
-    # last-known value (the "cached" tier -- `sensors` shell command and
-    # the future UI warning flag it). Past it the controller degrades to
-    # its defined failsafe inputs (flow = manual_setpoint, demand =
-    # "no sensor"). Must exceed both poll cadences so the cached tier
-    # exists.
-    "sensor_cache_s": 14400,
-    # The human's flow target. Used by the upcoming manual control mode
-    # (settings/UI switch lands with the UI) AND -- the reason it lands
-    # now -- as the failsafe flow when no fresh sensor data exists
-    # (expired cache, or boot without a usable sensor source). Default
-    # 45.0 == the historical FAILSAFE_FLOW constant, so behavior is
-    # unchanged until a human sets it. Deliberately NOT clamped by
-    # flow_min/flow_max: a manual value is explicit human intent. NOTE:
-    # with no t_out the frost clamp cannot run -- this value IS the floor.
-    "manual_setpoint": 45.0,
-    # Control loop (periodic tick interval in seconds; applied at boot)
-    "control_tick_s": 60,
-    # Transport
-    # "otgw_dummy" = debug dummy (shipped default until the gateway is wired
-    # and validated live); "otgw_uart" = the real OTGWTransportDrv on a
-    # machine.UART link (keys below); "direct_ot_dummy" = direct-OT dummy.
-    "transport": "otgw_dummy",   # "otgw_dummy" | "otgw_uart" | "direct_ot_dummy"
-    # OTGW UART link (PIC gateway firmware: 8N1 at 9600). GP0/GP1 are UART0's
-    # default pair and free in the arch §3.2 pin plan; 25-29 are Wi-Fi-owned.
-    "otgw_baud": 9600,
-    "otgw_tx_pin": 0,
-    "otgw_rx_pin": 1,
-    # Bounded per-command ack wait (seconds). A healthy gateway echoes in
-    # tens of ms; the timeout only bounds a dead-link attempt before the
-    # driver fast-fails in FAULT backoff (docs allow 2-5 s; keep it small).
-    "otgw_ack_timeout_s": 2,
-    # The "off" setpoint the rate limiter resets a stale setpoint to.
-    # MUST be < 8 degC: per the OTGW vigilance rule (AGENTS.md, OTGW
-    # section) a CS >= 8 is an ACTIVE setpoint -- it heats the boiler AND
-    # must be re-asserted every minute. 0.0 = "external control off" (the
-    # gateway also clears CHenable), the same end state as
-    # release_override. Any persisted value >= 8 is rejected and repaired
-    # at boot. (Supersedes the blueprint's 20 -- see AGENTS.md.)
-    "off_sentinel": 0.0,
-    # OTGW re-assert cadence (seconds): a CS >= 8 degC must be re-asserted at
-    # least every minute (AGENTS.md, OTGW section), so this stays sub-minute
-    # (default 30 s = 2x margin). Ignored by "direct_ot_dummy" (no obligation).
-    "cs_reassert_s": 30,
-    # Sensor sources (arch §3.5)
-    "t_out_source": "auto",       # "ccu3" | "local" | "auto"
-    "lux_source": "auto",
-    # Homematic CCU3 (arch §3.4). The ReGaHd JSON-RPC endpoint is
-    # /api/homematic.cgi (the bare /api/ path 403s). Credentials are
-    # per-device and must NOT live in this file: the defaults are empty
-    # (empty ccu3_url = no CCU3 source -> demand disabled, weather degrades
-    # to failsafe). Set them on the board (shell `config set ccu3_url /
-    # ccu3_user / ccu3_pass`) or via a local, uncommitted config at
-    # provision time.
-    "ccu3_url": "",
-    "ccu3_user": "",
-    "ccu3_pass": "",
-    "ccu3_weather_type": "HmIP-SWO",
-    "ccu3_poll_s": 60,
-    # Room source (arch §3.4): "heating_groups" (default) reads the HmIP-HEATING
-    # groups whose room has a WTH; "etrv" averages every HmIP-eTRV per room;
-    # "heating_groups+etrvs" (P6a) unions them -- a room uses its group if it has
-    # one, else its eTRV average (group wins when both). Room names always come
-    # from the CCU3 Room API (never from device names). Per-room weights +
-    # liveness live in /room-weights-config.json (see heating_groups.py).
-    "room_source": "heating_groups",
-    # Heating-demand saturation: the setpoint-minus-actual delta (deg C) at
-    # which demand reaches 100%. 3.0 matches the working ReGaHd delta script.
-    "demand_delta_cap": 3.0,
-    # Rooms poll interval (seconds): how often the (slow) CCU3 room pass runs.
-    # Kept separate from control_tick_s so the fast control loop can use the
-    # cached room demand without doing a 40s CCU3 pass every tick.
-    "rooms_poll_s": 300,
-    # P6a: how often to re-run the full discovery scan even when the room cache
-    # is valid, so a dead/added device surfaces (liveness + membership). 0 =
-    # only on a cache miss / room_source change.
-    "rooms_rediscovery_s": 3600,
-    # Home Assistant (arch §12)
-    "mqtt_enabled": False,
-    "mqtt_broker": "192.168.1.10",
-    "mqtt_user": "",
-    "mqtt_pass": "",
-    "mqtt_base_topic": "otc/boiler",
-    # Remote shell (framework service: status / log / reboot / repl + selftest)
-    "net_enabled": True,
-    "net_port": 23,             # telnet-style shell (standard telnet port)
-    # Optional static IP (empty = DHCP). Set all four, or none.
-    "net_ip": "",
-    "net_mask": "",
-    "net_gw": "",
-    "net_dns": "",
-}
 
 
 class Config:
-    """Validated, persistent view over the app control parameters."""
+    """Validated, persistent view over the app parameters (sectioned file)."""
 
     def __init__(self, filename=CONFIG_FILE):
         self._cm = ConfigManager(filename)
+        # One-time layout migration (pre-sections firmware persisted every
+        # key under a single CONTROL section). Runs BEFORE any get(): the
+        # tuned values must land in their new sections rather than being
+        # re-seeded from DEFAULTS. One flash write, then CONTROL is gone.
+        moved = migrate_legacy(self._cm.config)
+        if moved is not None:
+            self._cm.save_config()
+            logger.info("Config: migrated legacy %s section (%d keys into "
+                        "%d sections)" % (LEGACY_SECTION, moved,
+                                          len(SECTIONS)))
 
     def get(self, key, override_default=None):
         """Return a parameter by key, seeding its default if absent.
@@ -164,21 +57,21 @@ class Config:
         canonical default from ``DEFAULTS`` is used unless one is overridden.
         """
         d = DEFAULTS[key] if override_default is None else override_default
-        return self._cm.get(SECTION, key, d)
+        return self._cm.get(KEY_SECTION[key], key, d)
 
     def set(self, key, value):
         """Set + persist a parameter (no-op if the value is unchanged)."""
-        self._cm.set(SECTION, key, value)
+        self._cm.set(KEY_SECTION[key], key, value)
 
     def subscribe(self, key, callback):
         """Notify ``callback(new_value)`` when ``key`` changes."""
-        self._cm.subscribe(SECTION + "." + key, callback)
+        self._cm.subscribe(KEY_SECTION[key] + "." + key, callback)
 
     def unsubscribe(self, key, callback):
-        self._cm.unsubscribe(SECTION + "." + key, callback)
+        self._cm.unsubscribe(KEY_SECTION[key] + "." + key, callback)
 
     def all(self):
-        """Snapshot of every control parameter (for display / tests / UI)."""
+        """Snapshot of every parameter (for display / tests / UI)."""
         return dict((k, self.get(k)) for k in DEFAULTS)
 
     @property
@@ -189,6 +82,15 @@ class Config:
         keys and their expected types without importing the framework.
         """
         return DEFAULTS
+
+    @property
+    def sections(self):
+        """Section name -> its keys (the grouped display order for the shell).
+
+        Values are the shipped defaults; the shell reads current values via
+        ``all()`` and uses this only for grouping.
+        """
+        return SECTIONS
 
     def validate(self):
         """Validate types, domains, and §6 cross-key constraints.

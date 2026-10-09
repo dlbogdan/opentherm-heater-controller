@@ -10,18 +10,30 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "app" / "config.py"
 
 
+INITIAL_CONFIG = {}  # test hook: pre-populated raw file for the fake manager
+
+
 class _ConfigManager:
+    """Faithful stand-in for the framework manager (config-dict based)."""
+
     def __init__(self, _filename):
-        self.values = {}
+        self.config = dict(INITIAL_CONFIG)
+        self.saved = 0
+
+    def save_config(self):
+        self.saved += 1
 
     def get(self, section, key, default):
-        name = (section, key)
-        if name not in self.values:
-            self.values[name] = default
-        return self.values[name]
+        section_dict = self.config.get(section)
+        if isinstance(section_dict, dict) and key in section_dict:
+            return section_dict[key]
+        self.set(section, key, default)
+        return default
 
     def set(self, section, key, value):
-        self.values[(section, key)] = value
+        if not isinstance(self.config.get(section), dict):
+            self.config[section] = {}
+        self.config[section][key] = value
 
     def subscribe(self, *_args):
         pass
@@ -62,7 +74,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.config = self.module.Config("test.json")
 
     def set_value(self, key, value):
-        self.config._cm.values[(self.module.SECTION, key)] = value
+        self.config._cm.set(self.module.KEY_SECTION[key], key, value)
 
     def test_defaults_are_valid(self):
         self.assertEqual(self.config.validate(), [])
@@ -200,8 +212,8 @@ class ConfigValidationTests(unittest.TestCase):
         module = self.module
         # The board's existing file: the user set t_on to 15 (not the default
         # 13), and it predates the firmware that added control_tick_s.
-        # (The fake ConfigManager keys its store by (section, key).)
-        self.config._cm.values = {(module.SECTION, "t_on"): 15}
+        # (Raw section->dict layout, as the real manager stores it.)
+        self.config._cm.config = {module.KEY_SECTION["t_on"]: {"t_on": 15}}
 
         problems = self.config.validate()  # what main.py does at boot
 
@@ -211,7 +223,27 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(values["t_on"], 15)
         # (a) the new key is seeded from the shipped default and persisted.
         self.assertEqual(values["control_tick_s"], module.DEFAULTS["control_tick_s"])
-        self.assertIn((module.SECTION, "control_tick_s"), self.config._cm.values)
+        self.assertIn("control_tick_s",
+                      self.config._cm.config[module.KEY_SECTION["control_tick_s"]])
+
+    def test_legacy_control_section_migrates_at_construction(self):
+        # A pre-sections board file (everything under CONTROL) must land in
+        # the new sections with its TUNED values, persisted once, and the
+        # legacy section must be gone -- before any get() can re-seed
+        # defaults over the calibration.
+        global INITIAL_CONFIG
+        INITIAL_CONFIG = {self.module.LEGACY_SECTION: {
+            "t_on": 15, "ccu3_pass": "s", "bogus_key": 1}}
+        try:
+            cfg = self.module.Config("test.json")
+        finally:
+            INITIAL_CONFIG = {}
+        self.assertNotIn(self.module.LEGACY_SECTION, cfg._cm.config)
+        self.assertEqual(cfg._cm.config["HEATING_PARAMS"]["t_on"], 15)
+        self.assertEqual(cfg._cm.config["SENSORS_CONNECTION"]["ccu3_pass"], "s")
+        self.assertNotIn("bogus_key", cfg._cm.config.get("HEATING_PARAMS", {}))
+        self.assertEqual(cfg._cm.saved, 1, "persisted exactly once")
+        self.assertEqual(cfg.get("t_on"), 15, "reads the migrated value")
 
 
 if __name__ == "__main__":
