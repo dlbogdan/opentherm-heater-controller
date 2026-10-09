@@ -273,8 +273,8 @@ Done (firmware 1.1.91, `--debug`, slot b; host suite 185 green):
 
 Deferred to separate discussions (owner decision 2026-10-09):
 
-- Demand parity caveat (item 5): **folded into P6a's parity doc** (the room
-  model is touched there). The ReGaHk provenance script iterates **physical
+- Demand parity caveat (item 5): **DONE — folded into P6a's parity doc** (the
+  room model is touched there). The ReGaHk provenance script iterates **physical
   WTH/STHD/STH devices** and counts each transceiver channel; the firmware
   (`room_source=heating_groups`) iterates **HmIP-HEATING groups** (one per
   room with a WTH) and reads the group's `:1` channel. Identical only while
@@ -292,6 +292,38 @@ durable per-room weights/liveness registry. This supersedes the P5 item-5
 parity caveat (folded into P6a's doc).
 
 ### P6a — union mode + weights registry + weighted demand
+
+**DONE 2026-10-09 (firmware 1.1.92–1.1.94, `--debug`, slot a).** Implementation
+deltas from the plan above (all verified live on the board):
+
+- `room_source` enum gained `"heating_groups+etrvs"` (validate REJECTED a
+  bogus value live; accept + revert round-trip OK).
+- New config key **`rooms_rediscovery_s` (default 3600)**: the plan's
+  "liveness = discovery presence" needs discovery to actually re-run — the
+  cache otherwise only invalidates on miss/mode-change. Each rooms poll
+  re-discovers when the last discovery is older than this. A FAILED refresh
+  keeps the previous room list (the cache was good; only the scan failed) and
+  the P2 backoff marker prevents hammering.
+- **Cache schema bump:** `/ccu3_rooms_cache.json` entries now carry
+  `room_id` + `kind`; an old-schema cache is rejected → exactly one
+  re-discovery after upgrade (host-pinned).
+- Aggregate gained **`weighted_thermostats`** (the weighted denominator) for
+  transparency; `demand_pct` is the weighted mean; all-1.0 weights keep
+  `weighted_thermostats == thermostats` (parity, pinned by the device
+  autotest `autotests/test_rooms_weights_live.py`).
+- Shell parsing: room names contain spaces — for `rooms weight` the VALUE is
+  the last token and the REF is everything between (host-pinned).
+- Live evidence: union surfaced the 4 group-less eTRV rooms (Baie Copii 1022,
+  Baie Parinti 1026, Birou 1025, Casa Scarii 2803) alongside the 7 groups;
+  `rooms weight Garaj 0.5` → `weighted_thermostats` 7→6.5 and demand
+  1.4286→1.5385 % (exactly the weighted math); the 0.5 survived TWO reboots +
+  re-discoveries + a mode round-trip (never auto-deleted); switching back to
+  `heating_groups` flagged the 4 eTRV rooms `sensors_alive=false` with exactly
+  4 edge-triggered WARNs ("no longer in the room source") and kept their
+  weights. Full device suite 36/36, selftest 38/38. Board left in production
+  state: `room_source=heating_groups`, all weights 1.0 (union is the owner's
+  switch to make when ready).
+
 
 - **New `room_source` value `"heating_groups+etrvs"`**: per room, use the
   HEATING group if present, else that room's eTRV average; a room with both

@@ -8,6 +8,7 @@ the demand signal, and the cache.
 
 import asyncio
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -119,10 +120,12 @@ class RoomModelTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cache = str(Path(self.tmp.name) / "rooms.json")
+        self.registry = str(Path(self.tmp.name) / "weights.json")
 
     def make(self, fake, room_source="heating_groups", cap=3.0):
         return HeatingGroups(FakeConfig(room_source, cap),
-                             cache_path=self.cache, http_post=fake)
+                             cache_path=self.cache, registry_path=self.registry,
+                             http_post=fake)
 
     def test_heating_groups_mode_applies_wth_filter(self):
         # group A is in Room A (has a WTH) -> active; group B is in Room B
@@ -159,6 +162,21 @@ class RoomModelTests(unittest.TestCase):
         run(self.make(fake2).read())
         self.assertNotIn("Device.listAll", fake2.methods)
         self.assertNotIn("Room.listAll", fake2.methods)
+
+    def test_old_schema_cache_without_room_id_forces_rediscovery(self):
+        run(self.make(FakeCcu3()).read())  # populate a new-schema cache
+        with open(self.cache) as handle:
+            data = json.load(handle)
+        for room in data["rooms"]:  # downgrade to the pre-P6a schema
+            room.pop("room_id", None)
+            room.pop("kind", None)
+        with open(self.cache, "w") as handle:
+            json.dump(data, handle)
+        fake2 = FakeCcu3()
+        hg = self.make(fake2)
+        run(hg.read())
+        self.assertIn("Device.listAll", fake2.methods)  # old cache rejected
+        self.assertTrue(hg.weights())  # one-time re-discovery seeded the registry
 
 
 class FakeClock:
@@ -202,6 +220,7 @@ class DiscoveryBackoffTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cache = str(Path(self.tmp.name) / "ccu3_rooms_cache.json")
+        self.registry = str(Path(self.tmp.name) / "weights.json")
         self.clock = FakeClock()
         saved_clock = heating_groups._now_ms
         saved_asyncio = heating_groups.asyncio
@@ -214,7 +233,7 @@ class DiscoveryBackoffTests(unittest.TestCase):
 
     def make(self, post):
         return HeatingGroups(FakeConfig(), cache_path=self.cache,
-                             http_post=post)
+                             registry_path=self.registry, http_post=post)
 
     def test_failed_discovery_backs_off_instead_of_re_scanning(self):
         post = FailingCcu3()
@@ -242,6 +261,170 @@ class DiscoveryBackoffTests(unittest.TestCase):
         agg = run(rooms.read())
         self.assertIsNotNone(agg["demand_pct"])
         self.assertIsNone(rooms._discovery_failed_ms)  # success clears it
+
+
+class FakeCcu3Union(FakeCcu3):
+    """Room Big (group+WTH+eTRV), Room Small (eTRV only, no group),
+    Room Both (group+WTH+eTRV). Proves the P6a union + group-wins rule."""
+
+    def __init__(self, with_small_room=True):
+        FakeCcu3.__init__(self)
+        self.devices = {
+            "100": {"id": "100", "type": "HmIP-HEATING",
+                    "interface": "VirtualDevices", "address": "INT0001",
+                    "name": "Big", "channels": [{"id": "1001"}]},
+            "200": {"id": "200", "type": "HmIP-WTH-1", "interface": "HmIP-RF",
+                    "address": "W1", "name": "W1", "channels": [{"id": "2001"}]},
+            "300": {"id": "300", "type": "HmIP-eTRV-2", "interface": "HmIP-RF",
+                    "address": "E1", "name": "E1", "channels": [{"id": "3001"}]},
+            "130": {"id": "130", "type": "HmIP-HEATING",
+                    "interface": "VirtualDevices", "address": "INT0003",
+                    "name": "Both", "channels": [{"id": "1031"}]},
+            "230": {"id": "230", "type": "HmIP-WTH-1", "interface": "HmIP-RF",
+                    "address": "W3", "name": "W3", "channels": [{"id": "2031"}]},
+            "330": {"id": "330", "type": "HmIP-eTRV-2", "interface": "HmIP-RF",
+                    "address": "E3", "name": "E3", "channels": [{"id": "3031"}]},
+        }
+        self.rooms = {
+            "1": {"id": "1", "name": "Room Big",
+                  "channelIds": ["1001", "2001", "3001"]},
+            "3": {"id": "3", "name": "Room Both",
+                  "channelIds": ["1031", "2031", "3031"]},
+        }
+        self.values = {
+            ("VirtualDevices", "INT0001", "SET_POINT_TEMPERATURE"): "22.0",
+            ("VirtualDevices", "INT0001", "ACTUAL_TEMPERATURE"): "20.0",
+            # Group setpoint differs from the eTRV so group-wins is provable.
+            ("VirtualDevices", "INT0003", "SET_POINT_TEMPERATURE"): "21.0",
+            ("VirtualDevices", "INT0003", "ACTUAL_TEMPERATURE"): "20.0",
+            ("HmIP-RF", "E3", "SET_POINT_TEMPERATURE"): "25.0",
+            ("HmIP-RF", "E3", "ACTUAL_TEMPERATURE"): "24.0",
+        }
+        if with_small_room:
+            self.devices["310"] = {"id": "310", "type": "HmIP-eTRV-2",
+                                   "interface": "HmIP-RF", "address": "E2",
+                                   "name": "E2", "channels": [{"id": "3011"}]}
+            self.rooms["2"] = {"id": "2", "name": "Room Small",
+                               "channelIds": ["3011"]}
+            self.values[("HmIP-RF", "E2", "SET_POINT_TEMPERATURE")] = "23.0"
+            self.values[("HmIP-RF", "E2", "ACTUAL_TEMPERATURE")] = "20.0"
+
+
+class UnionModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cache = str(Path(self.tmp.name) / "rooms.json")
+        self.registry = str(Path(self.tmp.name) / "weights.json")
+
+    def make(self, fake, room_source="heating_groups+etrvs"):
+        return HeatingGroups(FakeConfig(room_source), cache_path=self.cache,
+                             registry_path=self.registry, http_post=fake)
+
+    def test_union_membership_and_kinds(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        self.assertEqual(sorted(r["room_id"] for r in hg._rooms),
+                         ["1", "2", "3"])
+        self.assertEqual({r["room_id"]: r["kind"] for r in hg._rooms},
+                         {"1": "group", "2": "etrv", "3": "group"})
+
+    def test_union_group_wins_when_room_has_both(self):
+        r = run(self.make(FakeCcu3Union()).read())
+        self.assertEqual(r["total"], 3)
+        # Room Both uses the GROUP setpoint (21.0), not its eTRV (25.0):
+        # avg sp = (22 + 23 + 21) / 3 = 22.0.
+        self.assertAlmostEqual(r["avg_setpoint"], 22.0)
+
+    def test_union_demand_is_weighted(self):
+        hg = self.make(FakeCcu3Union())
+        r = run(hg.read())
+        # all weights 1.0 -> unweighted mean delta (2+3+1)/3 = 2.0 -> 66.7%
+        self.assertAlmostEqual(r["demand_pct"], (2.0 / 3.0) * 100.0)
+        hg.set_weight("2", 0.4)  # down-weight the small group-less room
+        r2 = run(hg.read())      # cache hit; weight applied at aggregate
+        self.assertAlmostEqual(r2["weighted_thermostats"], 2.4)
+        # (2 + 0.4*3 + 1) / 2.4 = 1.75 -> /3 -> 58.33%
+        self.assertAlmostEqual(r2["demand_pct"], (1.75 / 3.0) * 100.0)
+
+    def test_reconcile_flags_vanished_but_keeps_weight(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        hg.set_weight("2", 0.4)
+        os.remove(self.cache)  # force a rediscovery
+        hg2 = self.make(FakeCcu3Union(with_small_room=False))
+        run(hg2.read())
+        byid = {e["room_id"]: e for e in hg2.weights()}
+        self.assertIn("2", byid)                       # never auto-deleted
+        self.assertFalse(byid["2"]["sensors_alive"])   # flagged gone
+        self.assertAlmostEqual(byid["2"]["weight"], 0.4)  # tuning preserved
+
+    def test_forget_prunes_a_room(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        ok, _ = hg.forget("Room Small")
+        self.assertTrue(ok)
+        self.assertNotIn("2", [e["room_id"] for e in hg.weights()])
+
+    def test_weight_out_of_domain_rejected(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        ok, _ = hg.set_weight("1", 1.5)
+        self.assertFalse(ok)
+        self.assertEqual(hg._weight_for("1"), 1.0)
+
+
+class PeriodicRediscoveryTests(unittest.TestCase):
+    """P6a: a valid-but-stale cache must re-run discovery after
+    rooms_rediscovery_s so a dead/added device surfaces."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.cache = str(Path(self.tmp.name) / "rooms.json")
+        self.registry = str(Path(self.tmp.name) / "weights.json")
+        self.clock = FakeClock()
+        saved_clock = heating_groups._now_ms
+        saved_asyncio = heating_groups.asyncio
+        heating_groups._now_ms = self.clock
+        heating_groups.asyncio = _NoopSleep()
+        self.addCleanup(lambda: setattr(heating_groups, "_now_ms", saved_clock))
+        self.addCleanup(lambda: setattr(heating_groups, "asyncio",
+                                        saved_asyncio))
+
+    def make(self, fake):
+        hg = HeatingGroups(FakeConfig("heating_groups+etrvs"),
+                           cache_path=self.cache, registry_path=self.registry,
+                           http_post=fake)
+        hg._rediscovery_s = 100
+        return hg
+
+    def test_stale_cache_reruns_the_scan(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())  # first discovery
+        fake2 = FakeCcu3Union()
+        hg._rpc._post = fake2
+        run(hg.read())  # within window: cache, no scan
+        self.assertNotIn("Device.listAll", fake2.methods)
+        self.clock.advance_s(hg._rediscovery_s + 1)
+        run(hg.read())  # stale: re-discover
+        self.assertIn("Device.listAll", fake2.methods)
+
+    def test_failed_refresh_keeps_the_previous_room_list(self):
+        hg = self.make(FakeCcu3Union())
+        r1 = run(hg.read())
+        self.clock.advance_s(hg._rediscovery_s + 1)
+        hg._rpc._post = FailingCcu3()
+        # The scan fails (backoff marker set) but the stale-but-good room
+        # list survives for the next pass; the value reads then raise (the
+        # pre-existing pass-abort contract -- the stale aggregate keeps
+        # steering via the P4 cached tier).
+        self.assertRaises(OSError, run, hg.read())
+        self.assertIsNotNone(hg._rooms)
+        self.assertEqual(len(hg._rooms), r1["total"])
+        # Reconcile only runs on a SUCCESSFUL scan: no false vanish flags.
+        for entry in hg.weights():
+            self.assertTrue(entry["sensors_alive"])
 
 
 if __name__ == "__main__":

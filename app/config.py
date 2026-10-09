@@ -117,8 +117,11 @@ DEFAULTS = {
     "ccu3_weather_type": "HmIP-SWO",
     "ccu3_poll_s": 60,
     # Room source (arch §3.4): "heating_groups" (default) reads the HmIP-HEATING
-    # groups whose room has a WTH; "etrv" averages every HmIP-eTRV per room.
-    # Room names always come from the CCU3 Room API (never from device names).
+    # groups whose room has a WTH; "etrv" averages every HmIP-eTRV per room;
+    # "heating_groups+etrvs" (P6a) unions them -- a room uses its group if it has
+    # one, else its eTRV average (group wins when both). Room names always come
+    # from the CCU3 Room API (never from device names). Per-room weights +
+    # liveness live in /room-weights-config.json (see heating_groups.py).
     "room_source": "heating_groups",
     # Heating-demand saturation: the setpoint-minus-actual delta (deg C) at
     # which demand reaches 100%. 3.0 matches the working ReGaHd delta script.
@@ -127,6 +130,10 @@ DEFAULTS = {
     # Kept separate from control_tick_s so the fast control loop can use the
     # cached room demand without doing a 40s CCU3 pass every tick.
     "rooms_poll_s": 300,
+    # P6a: how often to re-run the full discovery scan even when the room cache
+    # is valid, so a dead/added device surfaces (liveness + membership). 0 =
+    # only on a cache miss / room_source change.
+    "rooms_rediscovery_s": 3600,
     # Home Assistant (arch §12)
     "mqtt_enabled": False,
     "mqtt_broker": "192.168.1.10",
@@ -223,6 +230,7 @@ class Config:
             "transport": ("otgw_dummy", "otgw_uart", "direct_ot_dummy"),
             "t_out_source": ("ccu3", "local", "auto"),
             "lux_source": ("ccu3", "local", "auto"),
+            "room_source": ("heating_groups", "etrv", "heating_groups+etrvs"),
         }
         for key, choices in allowed.items():
             if v[key] not in choices:

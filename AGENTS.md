@@ -466,6 +466,32 @@ milestone). Discovery retry backoff is the separate fixed
 drop-on-stale — keeping last-known data steering + flagged is the point
 (owner decision 2026-10-09).
 
+**Union room source + per-room weights (P6a, firmware 1.1.94):** `room_source`
+accepts a third value `"heating_groups+etrvs"` — per room, the HEATING group if
+present (WTH-filtered, as in `heating_groups`), else that room's eTRV average;
+a room with both counts once (group wins). Live: this adds the 4 group-less
+eTRV rooms (Baie Copii, Baie Parinti, Birou, Casa Scarii) to the 7 groups.
+**Parity caveat (P5 item 5, resolved here):** the HA provenance script iterates
+*physical* WTH/STHD/STH channels; the firmware reads HEATING-group aggregates —
+identical only at 1-WTH-1-group-per-room (true in this house); weights are a
+deliberate divergence, default 1.0 preserves parity. The durable registry
+`/room-weights-config.json` (separate from the disposable rooms cache) is keyed
+by CCU `room_id` with `{name, kind, weight 0..1, sensors_alive, last_seen_ms}`
+(uptime stamp). Discovery **reconciles** it: new rooms added at weight 1.0,
+human weights NEVER overwritten, vanished/mode-excluded rooms flagged
+`sensors_alive=false` and **never auto-deleted** (one edge-triggered WARN per
+transition; verified: a 0.5 weight survived reboots + re-discovery + a
+room_source round-trip). Manual prune only: `rooms forget`. Demand is a
+weighted mean over rooms present in the pass (`weighted_thermostats` is the
+denominator; weight 0 mutes; a dead room is in neither sum). Liveness is
+**discovery presence** — a transient read failure just skips the room for that
+tick. `rooms_rediscovery_s` (default 3600) re-runs discovery on a valid-but-
+stale cache so device loss surfaces without a reboot; a failed refresh keeps
+the previous room list. The rooms cache schema now carries `room_id`+`kind`
+(an old-schema cache is rejected → one re-discovery after upgrade). Shell
+surface: `rooms weights`, `rooms weight <id|name> <0..1>`, `rooms forget
+<id|name>` — names contain spaces, so the value is the LAST token.
+
 The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
 `asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so
 a read **yields the event loop** instead of stalling the board (mirrors the
@@ -683,6 +709,18 @@ Consequences for this codebase (do not "fix" them away):
   minutes) streamed 5/5 PASS over 145.8 s with heartbeats through the
   60 s silent tests and no timeout at default settings; shell released
   cleanly and config stayed intact. Framework host suite 127 green.
+
+- P6a union room source + per-room weights (firmware 1.1.92-1.1.94): third
+  `room_source` `"heating_groups+etrvs"`, durable `/room-weights-config.json`
+  registry (room_id-keyed, never auto-deletes, weights survive reboots +
+  re-discovery + mode round-trips — verified live), weighted alive-only demand
+  (`weighted_thermostats` denominator; live: Garaj 0.5 → 7→6.5 and demand
+  1.4286→1.5385 % exactly per the weighted math), `rooms_rediscovery_s`
+  periodic re-discovery (failed refresh keeps the old list), rooms-cache
+  schema bump (`room_id`+`kind`; old cache rejected once), shell `rooms
+  weights/weight/forget` (space-in-name parsing). Host suite 203 green;
+  device autotest `test_rooms_weights_live` 2/2, full suite 36/36, selftest
+  38/38. Board left in production state (`heating_groups`, weights 1.0).
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

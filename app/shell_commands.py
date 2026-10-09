@@ -327,26 +327,40 @@ def register_config_commands(shell, config):
 
 # --------------------------------------------------------------------- heating groups
 
-ROOMS_USAGE = "usage: rooms   # one pass over all heating groups (one at a time)"
+ROOMS_USAGE = ("usage: rooms [weights | weight <room_id|name> <0..1> | "
+               "forget <room_id|name>]")
 
 
 def make_rooms_handler(groups):
-    """Return a shell callback that shows the most recent room aggregate.
+    """Return a shell callback for the room aggregate + weights registry.
 
-    The (slow) CCU3 room pass runs in its own periodic task (``rooms_poll_s``)
-    and caches the result; this command just returns that cache, so it is
-    instant and never blocks the board. The collector lives in
-    ``app/heating_groups.py``.
+    Bare ``rooms`` shows the most recent aggregate (the slow CCU3 room pass
+    runs in its own periodic task and caches the result, so this is instant).
+    ``rooms weights`` lists the per-room weights/liveness registry; ``rooms
+    weight <id|name> <0..1>`` sets a room's demand weight; ``rooms forget``
+    manually prunes a room (typically a dead one) from the registry.
     """
 
     def handle(args=""):
-        if args.split():
-            return ROOMS_USAGE
-        data = groups.last()
-        if data is None:
-            return ("no room data yet (rooms poll runs every rooms_poll_s; "
-                    "see `log`)")
-        return json.dumps(data)
+        parts = args.split()
+        if not parts:
+            data = groups.last()
+            if data is None:
+                return ("no room data yet (rooms poll runs every rooms_poll_s; "
+                        "see `log`)")
+            return json.dumps(data)
+        sub = parts[0].lower()
+        if sub == "weights" and len(parts) == 1:
+            return json.dumps(groups.weights())
+        if sub == "weight" and len(parts) >= 3:
+            # Room names contain spaces ("Clima Dormitor"): the value is the
+            # last token, everything between is the room ref.
+            ok, message = groups.set_weight(" ".join(parts[1:-1]), parts[-1])
+            return message if ok else "set failed: " + message
+        if sub == "forget" and len(parts) >= 2:
+            ok, message = groups.forget(" ".join(parts[1:]))
+            return message if ok else "forget failed: " + message
+        return ROOMS_USAGE
 
     return handle
 
@@ -356,8 +370,8 @@ def register_rooms_commands(shell, groups):
     shell.add(
         "rooms",
         make_rooms_handler(groups),
-        "latest room aggregate (setpoints/actuals + demand); updated by the "
-        "periodic rooms poll",
+        "latest room aggregate (setpoints/actuals + demand); subcommands: "
+        "weights | weight <room_id|name> <0..1> | forget <room_id|name>",
     )
 
 

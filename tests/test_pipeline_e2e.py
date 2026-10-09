@@ -329,6 +329,7 @@ class Stack:
             http_post=self.fake, sleep=lambda _s: None)
         self.rooms = HeatingGroups(
             cfg, cache_path=str(Path(self.tmp.name) / "r.json"),
+            registry_path=str(Path(self.tmp.name) / "weights.json"),
             http_post=self.fake)
         self.controller = Controller(initial_heating_on=False)
         self.controller.has_demand_sensor = True
