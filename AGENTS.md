@@ -574,6 +574,11 @@ Consequences for this codebase (do not "fix" them away):
   intent, not the gateway's internal default.
 - Remaining: live validation once the gateway is wired (host contract:
   `tests/test_otgw_driver.py`). `PM=<id>` fault-detail pull is a follow-up.
+  For that validation, `otgw-stream-capture.py` (repo root) is the host-side
+  diagnostic: a read-only mirror of the gateway's TCP 12700 serial stream
+  (every `CS=`/`CH=` the Pico writes, every ack, every OpenTherm frame),
+  timestamped to a log. Pure stdlib; point it at the gateway while the board
+  drives it.
 
 ## Framework ownership rules
 
