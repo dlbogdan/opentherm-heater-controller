@@ -235,25 +235,25 @@ class ConfigHandlerTests(unittest.TestCase):
     # --- secret masking (the telnet shell is unauthenticated on the LAN) ---
 
     def test_all_masks_set_secrets(self):
-        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        self.config.set("ccu3_pass", "not-the-real-ccu3-pass")
         self.config.set("mqtt_pass", "hunter2")
         data = json.loads(self.handle("all"))
         self.assertEqual(data["SENSORS_CONNECTION"]["ccu3_pass"], "***")
         self.assertEqual(data["MQTT"]["mqtt_pass"], "***")
         # The real value stays in the backing config (UI/tests read it).
-        self.assertEqual(self.config.get("ccu3_pass"), "REDACTED-CCU3-PASS")
+        self.assertEqual(self.config.get("ccu3_pass"), "not-the-real-ccu3-pass")
 
     def test_unset_secret_shows_empty_not_star(self):
         data = json.loads(self.handle("all"))
         self.assertEqual(data["SENSORS_CONNECTION"]["ccu3_pass"], "")
 
     def test_section_listing_masks_its_secrets(self):
-        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        self.config.set("ccu3_pass", "not-the-real-ccu3-pass")
         data = json.loads(self.handle("SENSORS_CONNECTION"))
         self.assertEqual(data["ccu3_pass"], "***")
 
     def test_get_single_secret_masked(self):
-        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        self.config.set("ccu3_pass", "not-the-real-ccu3-pass")
         self.assertEqual(
             json.loads(self.handle("get SENSORS_CONNECTION.ccu3_pass")),
             {"SENSORS_CONNECTION.ccu3_pass": "***"})
