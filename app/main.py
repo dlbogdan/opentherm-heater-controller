@@ -424,7 +424,8 @@ async def main():
         shell = TelnetService(wifi=wifi, port=int(config.get("net_port")),
                               name="otc")
         shell.add("selftest", _run_selftest, "run the control-core self-test")
-        from shell_commands import (register_config_commands,
+        from shell_commands import (AutotestMarkerShell,
+                                    register_config_commands,
                                     register_rooms_commands,
                                     register_sensors_commands,
                                     register_transport_commands)
@@ -446,18 +447,22 @@ async def main():
             # ImportError -- no runner on release boards -- stays silent).
             try:
                 tests_dir = _autotests_dir()
+                # Bracket every `test run` with file-logged start/end WARNs:
+                # the proof suites inject faults on purpose, and the markers
+                # keep /log.txt readable (between them = test evidence).
+                marker_shell = AutotestMarkerShell(shell, warn)
                 if tests_dir:
                     try:
-                        register_autotests(shell, warn=warn,
+                        register_autotests(marker_shell, warn=warn,
                                            directory=tests_dir)
                     except TypeError:
                         # Runner copy predates the directory kwarg: keep
                         # the test command on its default directory.
-                        register_autotests(shell, warn=warn)
+                        register_autotests(marker_shell, warn=warn)
                         warn("Shell: runner predates directory kwarg; "
                              "slot suites (%s) not registered" % tests_dir)
                 else:
-                    register_autotests(shell, warn=warn)
+                    register_autotests(marker_shell, warn=warn)
             except Exception as exc:
                 warn("Shell: autotest registration failed: %s" % exc)
         except ImportError:

@@ -324,6 +324,12 @@ deltas from the plan above (all verified live on the board):
   state: `room_source=heating_groups`, all weights 1.0 (union is the owner's
   switch to make when ready).
 
+Addendum (fw 1.1.95, same pass): the P6a live proof put deliberate WARNs in
+`/log.txt`, so `test run` is now bracketed there with `Autotests: TESTING IN
+PROGRESS -- what follows might not represent real events` / `Autotests:
+testing ended` (`AutotestMarkerShell` in `shell_commands.py`, wrapped around
+the runner registration in `main.py`; host-pinned + verified live).
+
 
 - **New `room_source` value `"heating_groups+etrvs"`**: per room, use the
   HEATING group if present, else that room's eTRV average; a room with both

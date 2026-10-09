@@ -375,6 +375,49 @@ def register_rooms_commands(shell, groups):
     )
 
 
+# ------------------------------------------------- autotest log markers (P6a)
+
+class AutotestMarkerShell:
+    """Proxy shell that brackets the runner's ``test`` command with WARNs.
+
+    The proof suites deliberately inject faults (P3 tick net, P4 forced
+    expiry), so their WARN lines land in /log.txt exactly like real field
+    faults. Wrapping the runner handler with a start/end marker makes the
+    flash log self-explanatory: WARNs between the markers are TEST
+    EVIDENCE, not field events. Only ``test run`` is bracketed -- ``test
+    list`` and the usage line inject no faults. The proxy forwards
+    ``add()`` untouched for every other command (and passes the streaming
+    declaration through, so the framework's TypeError fallback for old
+    services still works).
+    """
+
+    def __init__(self, shell, warn):
+        self._shell = shell
+        self._warn = warn
+
+    def add(self, command, handler, description="", **kwargs):
+        if command == "test":
+            handler = _bracket_test_handler(handler, self._warn)
+        return self._shell.add(command, handler, description, **kwargs)
+
+
+def _bracket_test_handler(handle, warn):
+    """Wrap the runner's handle so ``test run ...`` logs start/end markers."""
+
+    async def wrapped(args="", emit=None):
+        parts = args.split()
+        if not parts or parts[0].lower() != "run":
+            return await handle(args, emit)
+        warn("Autotests: TESTING IN PROGRESS -- what follows might not "
+             "represent real events")
+        try:
+            return await handle(args, emit)
+        finally:
+            warn("Autotests: testing ended")
+
+    return wrapped
+
+
 # ------------------------------------------------------------------- sensors
 
 SENSORS_USAGE = "usage: sensors   # live freshness + last-known readings"

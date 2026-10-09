@@ -309,6 +309,15 @@ right one:
   are **edge-triggered** (one line per transition into expired, never per
   tick) because the expired cache stays in RAM for the UI/`sensors` display
   — a per-tick WARN would be a flash-write storm.
+- **Test-run bracketing (fw 1.1.95):** the proof suites inject faults on
+  purpose (P3 sentinel `Control: tick failed: control-net live demo`, P4
+  forced-expiry WARNs), so their lines land in `/log.txt` like real field
+  faults. `AutotestMarkerShell` (`app/shell_commands.py`, wrapped around the
+  runner registration in `main.py`) brackets every `test run` with
+  `Autotests: TESTING IN PROGRESS -- what follows might not represent real
+  events` / `Autotests: testing ended`. **WARNs between those markers are
+  test evidence, not field events** — read the markers before diagnosing
+  from a log that follows a `test run`. `test list` is not bracketed.
 
 Do **not** "improve" a periodic INFO log back into the file — that is exactly
 the flash wear this policy avoids. Boot evidence is the OTA process (framework,
@@ -721,6 +730,12 @@ Consequences for this codebase (do not "fix" them away):
   weights/weight/forget` (space-in-name parsing). Host suite 203 green;
   device autotest `test_rooms_weights_live` 2/2, full suite 36/36, selftest
   38/38. Board left in production state (`heating_groups`, weights 1.0).
+- Autotest log bracketing (firmware 1.1.95): `AutotestMarkerShell` brackets
+  every `test run` in `/log.txt` with `Autotests: TESTING IN PROGRESS ...` /
+  `Autotests: testing ended` so the proof suites' deliberate WARNs are
+  unmistakably test evidence. Verified live: `test run control_net` logged
+  start marker -> sentinel `Control: tick failed: control-net live demo` ->
+  end marker; `test list` logged nothing. Host suite 208 green.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),
