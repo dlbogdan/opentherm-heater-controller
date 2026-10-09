@@ -1,6 +1,9 @@
-# MicroPython application
+# OpenTherm heater controller (Pico 2 W)
 
-This application uses `micropy-system` as a pinned Git submodule.
+Standalone MicroPython controller: reads the Homematic CCU3 (weather +
+heating rooms), computes the boiler flow target, and drives the OTGW
+through an audited transport. Firmware lifecycle (A/B OTA, provisioning,
+shell) is owned by the pinned `micropy-system` Git submodule.
 
 ## Common commands
 
@@ -97,7 +100,8 @@ its defined failsafe input (no fresh ``t_out`` -> flow target =
 ``manual_setpoint``, the human's setting, default 45 °C). The per-source
 freshness tier (fresh / cached / expired / none) plus its age is recomputed
 every control tick and reported live by the ``sensors`` shell command
-(freshness + age + the last-known readings, recomputed at query time) --
+(``sensors weather`` / ``sensors demand`` cards: tier, age recomputed at
+query time, plus the last-known readings) --
 the same
 state the future UI will use for its "working with cached data" warning.
 Without a reachable CCU3 (or with an empty ``ccu3_url`` — ``auto``
@@ -112,24 +116,56 @@ calls the loop made. Rejecting or dropping a write rolls the
 controller's optimistic state back so the next tick retries, and the
 rejection is visible in the ring.
 
-## Config over the air
+## The shell: one resource grammar for every data command
 
-The app config (``/app-config.json``) can be read and edited from the
-remote shell -- no USB, no rebuild. Values are type-checked against the
-shipped defaults, validated (an out-of-range value is rejected and reset,
-never persisted), and persisted to the file, which also notifies any live
-subscribers.
+The device shell (port 23) exposes `config`, `rooms`, `sensors` and `test`
+with ONE shape:
+
+```
+<cmd>                             the NAMES that exist
+<cmd> all                         every item, full detail
+<cmd> <NAME>                      one item
+<cmd> get/set <NAME>.<field> [VALUE]
+<cmd> <verb> ...                  actions (reset, forget, run)
+```
+
+Refs are case-insensitive (canonical spelling echoed); the LAST `.` splits
+ref from field; room names with spaces accept quotes. Errors teach the
+grammar (a flat `config get t_on` answers with the qualified form).
 
 ```sh
-python micropy-system/tools/target/telnet.py DEVICE_IP config                # all values (JSON)
-python micropy-system/tools/target/telnet.py DEVICE_IP config get t_on       # one value
-python micropy-system/tools/target/telnet.py DEVICE_IP config set t_on 15    # set + validate
-python micropy-system/tools/target/telnet.py DEVICE_IP config set mqtt_enabled true
-python micropy-system/tools/target/telnet.py DEVICE_IP rooms                 # all heating groups, one at a time
-python micropy-system/tools/target/telnet.py DEVICE_IP sensors                 # live freshness + last-known readings
-python micropy-system/tools/target/telnet.py DEVICE_IP config reset t_on     # back to default
-python micropy-system/tools/target/telnet.py DEVICE_IP config defaults       # shipped defaults
+python micropy-system/tools/target/telnet.py DEVICE_IP config              # section names
+python micropy-system/tools/target/telnet.py DEVICE_IP config all          # every value, grouped
+python micropy-system/tools/target/telnet.py DEVICE_IP config boiler       # one section
+python micropy-system/tools/target/telnet.py DEVICE_IP config get HEATING_PARAMS.t_on
+python micropy-system/tools/target/telnet.py DEVICE_IP config set HEATING_PARAMS.t_on 15
+python micropy-system/tools/target/telnet.py DEVICE_IP config reset SHELL.net_port
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms               # room names + ids
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms 1021          # one room CARD
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms stats         # pass aggregate
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms set "Dormitor".weight 0.5
+python micropy-system/tools/target/telnet.py DEVICE_IP rooms forget "Baie Copii"
+python micropy-system/tools/target/telnet.py DEVICE_IP sensors             # ["weather", "demand"]
+python micropy-system/tools/target/telnet.py DEVICE_IP sensors weather     # tier, age, readings
+python micropy-system/tools/target/telnet.py DEVICE_IP test                # list suites
+python micropy-system/tools/target/telnet.py DEVICE_IP test run config     # run a subset
 ```
+
+A room card merges the durable weights/liveness registry with this pass's
+readings (`weight`, `sensors_alive`, `setpoint`, `actual`,
+`demand_delta`, ...); only `weight` is writable. `sensors` is read-only by
+design -- its `set` error names the `SENSORS_CONFIG.*` key that actually
+changes the behavior.
+
+## Config over the air
+
+The app config (`/app-config.json`) is grouped into six semantic sections
+(`HEATING_PARAMS`, `SENSORS_CONFIG`, `SENSORS_CONNECTION`, `BOILER`,
+`MQTT`, `SHELL`); the layout, defaults and key->section map live in
+`app/config_schema.py`. It can be read and edited from the remote shell --
+no USB, no rebuild. Values are type-checked against the shipped defaults,
+validated (an out-of-range value is rejected and reset, never persisted),
+and persisted to the file, which also notifies any live subscribers.
 
 Control parameters (``t_on``/``t_off``, flow limits, ``b``, solar/demand,
 ``min_change``) are re-read by the control loop every tick, so a ``set``
