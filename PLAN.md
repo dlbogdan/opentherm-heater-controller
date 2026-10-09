@@ -249,6 +249,42 @@ board). Live: `test run freshness` streamed 5/5 PASS over 145.8 s with
 heartbeats through the 60 s silent tests, no timeout at defaults; shell
 released cleanly, config intact. Framework host suite 127 green.
 
+## P5 — Housekeeping (normal flow: host green → `--debug` deploy → shell verify → commit)
+
+Done (firmware 1.1.91, `--debug`, slot b; host suite 185 green):
+
+- [x] `app/rooms.py` docstring: the demand scale is 0..100 percent, not 0..1.
+- [x] `config` shell dump masks secrets: any `*_pass` / `*_token` / `*_secret`
+  key is masked in `config` / `config get` / `set` / `reset` / `defaults`
+  output (`app/shell_commands.py`) — the telnet shell is unauthenticated on
+  the LAN. Set secrets show `***`, unset show `""` (reveals whether set, not
+  the value); real values stay in `config.all()` for the UI/tests. Verified
+  live: `config` → `ccu3_pass '***'`, `mqtt_pass ''`, non-secrets in clear;
+  `config get ccu3_pass` → `{"ccu3_pass": "***"}`. Host pins in
+  `tests/test_config_shell.py`.
+- [x] `_run_selftest` removes the `sys.path` entries it inserts (was growing
+  `sys.path` by two per invocation, `app/main.py`). Pinned by the new device
+  autotest `autotests/test_selftest_live.py` (runs the real selftest, asserts
+  `sys.path` unchanged) — PASS on-device (283 ms).
+- [x] `otgw_capture.py` → committed as `otgw-stream-capture.py` (renamed for
+  clarity): read-only mirror of the OTGW TCP 12700 stream, the host-side
+  diagnostic for the pending live-gateway validation. AGENTS.md OTGW section
+  points at it. (Separate commit `6689bab`, host-only, no deploy.)
+
+Deferred to separate discussions (owner decision 2026-10-09):
+
+- Demand parity caveat (item 5): the ReGaHk provenance script iterates
+  **physical WTH/STHD/STH devices** and counts each transceiver channel; the
+  firmware (`room_source=heating_groups`) iterates **HmIP-HEATING groups**
+  (one per room with a WTH) and reads the group's `:1` channel. Identical
+  only while each room has exactly one WTH-type thermostat and one group
+  (true in this house). To be documented in `heating_groups.py` and/or
+  AGENTS.md — discuss the exact wording/scope separately.
+- `lux_source` (item 6): currently inert (only in `config.py` DEFAULTS +
+  validate enum; never read — `t_out_source`/`room_source` ARE wired). NOT
+  to be dropped: it is the reserved selector for future multi-source lux
+  (e.g. Bluetooth). Discuss the reserved-key documentation separately.
+
 ## P5 — Housekeeping (host-only, one commit, no deploy)
 
 - `app/rooms.py:4` docstring: the demand scale is 0..100 percent, not 0..1.

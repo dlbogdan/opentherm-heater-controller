@@ -1,10 +1,11 @@
 """Rooms/demand source boundary (arch §3.4) -- mirrors the weather source.
 
-The control loop reads the cached heating demand (0..1) from this source. The
-source is the only place that knows where the per-room setpoint/actual data
-comes from (today: the Homematic CCU3 heating groups). ``last()`` is ``None``
-before the first pass and for the null source, which is the defined "no room
-data" input: the control loop then runs on the weather source alone.
+The control loop reads the cached heating demand (0..100 percent) from this
+source. The source is the only place that knows where the per-room setpoint/
+actual data comes from (today: the Homematic CCU3 heating groups). ``last()``
+is ``None`` before the first pass and for the null source, which is the
+defined "no room data" input: the control loop then runs on the weather
+source alone.
 
 This module is framework-free and **CCU3-free** (the CCU3 collector is imported
 lazily by ``make_rooms_source``), so it is host-testable and ``main.py`` can

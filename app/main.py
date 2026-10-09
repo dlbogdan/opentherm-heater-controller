@@ -116,23 +116,34 @@ def _run_selftest(_args=""):
         active = "a"
     if active not in ("a", "b"):
         active = "a"
+    inserted = []
     for p in ("apps/" + ("b" if active == "a" else "a"), "apps/" + active):
         try:
             sys.path.insert(0, p)
+            inserted.append(p)
         except Exception:
             pass
-    import selftest
     captured = []
     real_print = builtins.print
-    builtins.print = lambda *values, **_kw: captured.append(
-        " ".join(str(value) for value in values))
     try:
+        import selftest
+        builtins.print = lambda *values, **_kw: captured.append(
+            " ".join(str(value) for value in values))
         ok = selftest.run()
     except Exception as e:
         ok = False
         captured.append("error: %s" % e)
     finally:
         builtins.print = real_print
+        # Remove EXACTLY the entries this call inserted (the launcher's own
+        # slot path stays). The old code left them in place, so every
+        # ``selftest`` invocation grew sys.path by two -- a slow leak plus
+        # import-order noise on a long-lived board (PLAN.md P5).
+        for p in inserted:
+            try:
+                sys.path.remove(p)
+            except ValueError:
+                pass
     detail = "\n".join(captured[-30:])
     verdict = "PASS" if ok else "FAIL"
     return "%s: control core self-test%s" % (

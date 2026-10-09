@@ -229,12 +229,40 @@ def _coerce(default, raw):
     return True, text  # strings pass through
 
 
+# Secret config keys are masked in shell output: the telnet shell is
+# unauthenticated on the LAN, so a bare ``config`` (or ``config get``) must
+# never put a credential on the wire. The REAL values stay in ``config.all()``
+# (host tests + the future UI read them); only this display layer masks. Any
+# ``*_pass`` / ``*_token`` / ``*_secret`` key matches, so a new credential key
+# is masked automatically.
+_SECRET_SUFFIXES = ("_pass", "_token", "_secret")
+
+
+def _is_secret(key):
+    return key.endswith(_SECRET_SUFFIXES)
+
+
+def _shown(key, value):
+    """Mask a secret to show WHETHER it is set without revealing it."""
+    if not _is_secret(key):
+        return value
+    return "***" if value else ""
+
+
+def _mask_secrets(values):
+    return dict((k, _shown(k, v)) for k, v in values.items())
+
+
 def make_config_handler(config):
     """Return a shell callback that reads/edits the app config over the air.
 
     ``set`` coerces to the key's type, persists via ``config.set`` (which also
     notifies live subscribers), then runs ``config.validate`` to self-heal:
     an out-of-range value is reported REJECTED and reset, a valid one OK.
+
+    Secret values are masked in every reply (see ``_mask_secrets``): the
+    telnet shell is unauthenticated on the LAN, so ``config`` must never put
+    a credential on the wire.
     """
     defaults = config.defaults
 
@@ -243,14 +271,15 @@ def make_config_handler(config):
         command = parts[0] if parts else "list"
 
         if command in ("list", "get") and len(parts) <= 1:
-            # Bare ``config`` / ``config list`` / ``config get`` -> all values.
-            return json.dumps(config.all())
+            # Bare ``config`` / ``config list`` / ``config get`` -> all values
+            # (secrets masked -- the shell is unauthenticated on the LAN).
+            return json.dumps(_mask_secrets(config.all()))
 
         if command == "get" and len(parts) == 2:
             key = parts[1]
             if key not in defaults:
                 return "unknown config key: %s" % key
-            return json.dumps({key: config.get(key)})
+            return json.dumps({key: _shown(key, config.get(key))})
 
         if command == "set" and len(parts) == 3:
             key, raw = parts[1], parts[2]
@@ -264,9 +293,10 @@ def make_config_handler(config):
             current = config.get(key)
             if current == value:
                 note = "" if not problems else " (also repaired: %s)" % "; ".join(problems)
-                return "OK: %s = %s%s" % (key, current, note)
+                return "OK: %s = %s%s" % (key, _shown(key, current), note)
             return ("REJECTED: %s = %s is invalid; reset to %s. %s"
-                    % (key, value, current, "; ".join(problems)))
+                    % (key, _shown(key, value), _shown(key, current),
+                       "; ".join(problems)))
 
         if command == "reset" and len(parts) == 2:
             key = parts[1]
@@ -275,11 +305,11 @@ def make_config_handler(config):
             config.set(key, defaults[key])
             problems = config.validate()
             return "OK: %s reset to %s%s" % (
-                key, config.get(key),
+                key, _shown(key, config.get(key)),
                 "" if not problems else " (repaired: %s)" % "; ".join(problems))
 
         if command == "defaults" and len(parts) == 1:
-            return json.dumps(defaults)
+            return json.dumps(_mask_secrets(defaults))
 
         return CONFIG_USAGE
 

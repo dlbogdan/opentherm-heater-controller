@@ -27,6 +27,11 @@ class FakeConfig:
             "mqtt_enabled": False,   # bool
             "transport": "otgw_dummy",  # str, allowed: otgw_dummy|otgw_uart|direct_ot_dummy
             "ccu3_url": "http://10.9.30.10/api/homematic.cgi",  # str
+            # Secret-shaped keys (the masking rule is suffix-based, so a new
+            # *_pass / *_token / *_secret key is masked automatically).
+            "ccu3_pass": "",
+            "mqtt_pass": "",
+            "api_token": "",
         }
         self._values = {}
 
@@ -122,6 +127,42 @@ class ConfigHandlerTests(unittest.TestCase):
     def test_defaults_dumps_shipped_defaults(self):
         data = json.loads(self.handle("defaults"))
         self.assertEqual(data, self.config.defaults)
+
+    # --- secret masking (the telnet shell is unauthenticated on the LAN) ---
+
+    def test_list_masks_set_secrets(self):
+        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        self.config.set("mqtt_pass", "hunter2")
+        data = json.loads(self.handle("list"))
+        self.assertEqual(data["ccu3_pass"], "***")
+        self.assertEqual(data["mqtt_pass"], "***")
+        # The real value stays in the backing config (UI/tests read it).
+        self.assertEqual(self.config.get("ccu3_pass"), "REDACTED-CCU3-PASS")
+
+    def test_unset_secret_shows_empty_not_star(self):
+        data = json.loads(self.handle("list"))
+        self.assertEqual(data["ccu3_pass"], "")
+
+    def test_get_single_secret_masked(self):
+        self.config.set("ccu3_pass", "REDACTED-CCU3-PASS")
+        self.assertEqual(json.loads(self.handle("get ccu3_pass")),
+                         {"ccu3_pass": "***"})
+
+    def test_set_secret_echoes_masked(self):
+        response = self.handle("set ccu3_pass hunter2")
+        self.assertIn("OK: ccu3_pass = ***", response)
+        self.assertNotIn("hunter2", response)
+        self.assertEqual(self.config.get("ccu3_pass"), "hunter2")
+
+    def test_token_and_secret_suffixes_masked_too(self):
+        self.config.set("api_token", "abc123")
+        self.assertEqual(json.loads(self.handle("get api_token")),
+                         {"api_token": "***"})
+
+    def test_non_secret_never_masked(self):
+        self.config.set("ccu3_url", "http://example/api")
+        self.assertEqual(json.loads(self.handle("get ccu3_url")),
+                         {"ccu3_url": "http://example/api"})
 
     def test_bad_subcommand_returns_usage(self):
         self.assertIn("usage: config", self.handle("frobnicate"))
