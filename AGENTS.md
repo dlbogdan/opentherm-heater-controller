@@ -541,7 +541,9 @@ stale cache so device loss surfaces without a reboot; a failed refresh keeps
 the previous room list. The rooms cache schema now carries `room_id`+`kind`
 (an old-schema cache is rejected → one re-discovery after upgrade). Shell
 surface (resource grammar, see below): bare `rooms` = the room names,
-`rooms all` = every card, `rooms <id|name>` = one card (registry + this
+`rooms all` = every card, `rooms stats` = the pass aggregate (the demand
+inputs + stats the control loop folds, minus `room_data`), `rooms
+<id|name>` = one card (registry + this
 pass's readings: `setpoint`/`actual`/`demand_delta` from the aggregate's
 `room_data` map), `rooms get/set <id|name>.<field>` (writable: `weight`),
 `rooms forget <id|name>`.

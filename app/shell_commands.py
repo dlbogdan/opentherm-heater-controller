@@ -397,8 +397,8 @@ def register_config_commands(shell, config):
 
 # --------------------------------------------------------------------- heating groups
 
-ROOMS_USAGE = ("usage: rooms [<id|name> | all | get <id|name>.<field> | "
-               "set <id|name>.<field> <value> | forget <id|name>]")
+ROOMS_USAGE = ("usage: rooms [<id|name> | all | stats | get <id|name>.<field>"
+               " | set <id|name>.<field> <value> | forget <id|name>]")
 
 ROOM_FIELDS = ("room_id name kind weight sensors_alive last_seen_ms setpoint "
                "actual demand_delta")
@@ -446,6 +446,16 @@ def make_rooms_handler(groups):
         head = parts[0].lower()
         if head == "all":
             return json.dumps(groups.cards())
+        if head == "stats":
+            # The pass aggregate (the pre-redesign bare-`rooms` dump): the
+            # control loop's demand inputs + stats. room_data is omitted --
+            # per-room readings are the cards' job.
+            agg = groups.last()
+            if agg is None:
+                return ("no room data yet (rooms poll runs every "
+                        "rooms_poll_s; see `log`)")
+            return json.dumps(dict((k, v) for k, v in agg.items()
+                                   if k != "room_data"))
         if head == "forget" and len(parts) >= 2:
             ok, message = groups.forget(" ".join(parts[1:]))
             return message if ok else "forget failed: " + message
@@ -484,7 +494,7 @@ def register_rooms_commands(shell, groups):
     shell.add(
         "rooms",
         make_rooms_handler(groups),
-        "room cards (registry + readings); subcommands: all | get/set "
+        "room cards (registry + readings); subcommands: all | stats | get/set "
         "<id|name>.<field> | forget <id|name>",
     )
 

@@ -22,6 +22,7 @@ class FakeGroups:
     def __init__(self):
         self.set_calls = []
         self.forget_calls = []
+        self._agg = None
         self._cards = {
             "2": {"room_id": "2", "name": "Room Small", "kind": "etrv",
                   "weight": 0.4, "sensors_alive": True, "last_seen_ms": 1,
@@ -30,6 +31,9 @@ class FakeGroups:
                   "weight": 1.0, "sensors_alive": False, "last_seen_ms": 2,
                   "setpoint": None, "actual": None, "demand_delta": None},
         }
+
+    def last(self):
+        return self._agg
 
     def weights(self):
         return [{"room_id": rid, "name": c["name"], "kind": c["kind"],
@@ -78,6 +82,18 @@ class RoomsShellTests(unittest.TestCase):
         out = json.loads(self.handle("all"))
         self.assertEqual(len(out), 2)
         self.assertIn("demand_delta", out[0])
+
+    def test_stats_returns_the_pass_aggregate_without_room_data(self):
+        self.groups._agg = {"demand_pct": 42.0, "weighted_thermostats": 3.0,
+                            "max_delta_room": "Room Small",
+                            "room_data": {"2": {"sp": 21.0, "act": 20.0}}}
+        out = json.loads(self.handle("stats"))
+        self.assertEqual(out["demand_pct"], 42.0)
+        self.assertEqual(out["max_delta_room"], "Room Small")
+        self.assertNotIn("room_data", out)  # readings are the cards' job
+
+    def test_stats_without_a_pass_yet_says_so(self):
+        self.assertIn("no room data yet", self.handle("stats"))
 
     def test_one_card_by_id(self):
         out = json.loads(self.handle("2"))

@@ -350,7 +350,9 @@ stay verbs (`rooms forget`, `test run`). Room cards merge the durable
 registry (weight/liveness) with this pass's readings (new `room_data` map
 in the poll aggregate: room_id -> sp/act); only `weight` is writable.
 `sensors` = weather/demand source cards, read-only by design (its `set`
-error points at `SENSORS_CONFIG.*`). Quote-aware refs for spaced names
+error points at `SENSORS_CONFIG.*`). The old bare-`rooms` aggregate dump
+survives as `rooms stats` (owner asked for it back; `room_data` omitted --
+readings are the cards' job). Quote-aware refs for spaced names
 (decorative quotes, unquoted fallback kept); last-dot field split;
 case-insensitive everywhere. NO aliases for the old subcommands (owner
 decision, early development). Framework: bare `test` lists suites (was:
