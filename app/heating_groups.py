@@ -181,8 +181,11 @@ class HeatingGroups:
         max_delta_name = ""
         wsum = 0.0    # P6a: sum of weights over rooms with both values present
         wdelta = 0.0  # P6a: weight-scaled sum of demanding deltas
+        room_data = {}  # room_id -> {"sp", "act"} for the shell room cards
         for room in rooms:
             sp, act = await self._room_values(room)
+            if room.get("room_id") is not None:
+                room_data[str(room["room_id"])] = {"sp": sp, "act": act}
             if sp is not None:
                 sum_sp += sp
                 n_sp += 1
@@ -234,6 +237,10 @@ class HeatingGroups:
             "max_delta": max_delta,
             "max_delta_room": max_delta_name,
             "demand_pct": demand_pct,
+            # Per-room readings for the shell room cards. O(rooms) but tiny
+            # (~a dozen 2-float entries); the O(1) rule that matters is
+            # never holding the 10-50 KB CCU device payloads (AGENTS.md).
+            "room_data": room_data,
             # When this aggregate was produced (ticks_ms at pass completion):
             # lets consumers (shell, device tests) check freshness against
             # rooms_poll_s instead of trusting the cache blindly.
@@ -533,7 +540,7 @@ class HeatingGroups:
 
     # -- public surface for the shell / future UI / MQTT ---------------------
     def weights(self):
-        """Registry snapshot (sorted by room name) for `rooms weights`."""
+        """Registry snapshot (sorted by room name) for `rooms` (bare list)."""
         out = []
         for rid in sorted(self._registry,
                           key=lambda k: (self._registry[k].get("name", ""), k)):
@@ -544,6 +551,36 @@ class HeatingGroups:
                         "sensors_alive": bool(entry.get("sensors_alive", False)),
                         "last_seen_ms": entry.get("last_seen_ms")})
         return out
+
+    def card(self, ref):
+        """One room card (registry + this pass's readings) -> (card, error).
+
+        ``ref`` is a room_id or a (unique, case-insensitive) room name.
+        """
+        rid, err = self._resolve_room(ref)
+        if err:
+            return None, err
+        return self._card_for(rid), None
+
+    def cards(self):
+        """Every registry card (same name-sorted order as weights())."""
+        return [self._card_for(rid) for rid in sorted(
+            self._registry,
+            key=lambda k: (self._registry[k].get("name", ""), k))]
+
+    def _card_for(self, rid):
+        entry = self._registry[rid]
+        rd = (self._last or {}).get("room_data", {}).get(rid) or {}
+        sp = rd.get("sp")
+        act = rd.get("act")
+        return {"room_id": rid, "name": entry.get("name", ""),
+                "kind": entry.get("kind", ""),
+                "weight": float(entry.get("weight", 1.0)),
+                "sensors_alive": bool(entry.get("sensors_alive", False)),
+                "last_seen_ms": entry.get("last_seen_ms"),
+                "setpoint": sp, "actual": act,
+                "demand_delta": (sp - act) if (sp is not None
+                                               and act is not None) else None}
 
     def _resolve_room(self, ref):
         """room_id for a ref given as id or (unique) name -> (id, error)."""

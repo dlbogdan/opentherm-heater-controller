@@ -33,3 +33,24 @@ class TestRoomsWeightsLive(unittest.TestCase):
         # Default weights are all 1.0 -> the weighted denominator equals the
         # plain thermostat count (behaviour unchanged until a weight is set).
         self.assertAlmostEqual(agg["weighted_thermostats"], agg["thermostats"])
+
+    def test_room_cards_merge_registry_and_readings(self):
+        rooms = self._rooms()
+        if not hasattr(rooms, "cards"):
+            self.skipTest("live rooms collector predates room cards")
+        cards = rooms.cards()
+        self.assertEqual(len(cards), len(rooms.weights()))
+        for card in cards:
+            for key in ("room_id", "name", "kind", "weight", "sensors_alive",
+                        "setpoint", "actual", "demand_delta"):
+                self.assertIn(key, card)
+        agg = rooms.last()
+        rd = (agg or {}).get("room_data") or {}
+        if rd:
+            # Only rooms PRESENT in this pass carry readings (a
+            # mode-excluded/dead room has a card but no room_data entry).
+            rid = sorted(rd)[0]
+            card, err = rooms.card(rid)
+            self.assertIsNone(err)
+            self.assertEqual(card["setpoint"], rd[rid]["sp"])
+            self.assertEqual(card["actual"], rd[rid]["act"])

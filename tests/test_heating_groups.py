@@ -427,5 +427,52 @@ class PeriodicRediscoveryTests(unittest.TestCase):
             self.assertTrue(entry["sensors_alive"])
 
 
+class RoomCardTests(unittest.TestCase):
+    """card()/cards() merge the durable registry with this pass's readings."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        hg = HeatingGroups(FakeConfig(),
+                           cache_path=str(Path(self.tmp.name) / "rooms.json"),
+                           registry_path=str(Path(self.tmp.name) / "weights.json"),
+                           http_post=FakeCcu3())
+        run(hg.read())
+        hg.set_weight("Room A", 0.5)
+        self.hg = hg
+
+    def test_aggregate_carries_per_room_readings(self):
+        rd = self.hg.last()["room_data"]
+        self.assertEqual(set(rd), {"1"})  # only the active room
+        self.assertAlmostEqual(rd["1"]["sp"], 22.0)
+        self.assertAlmostEqual(rd["1"]["act"], 20.0)
+
+    def test_card_by_id_and_by_name(self):
+        by_id, err = self.hg.card("1")
+        self.assertIsNone(err)
+        by_name, err = self.hg.card("room a")  # case-insensitive
+        self.assertIsNone(err)
+        self.assertEqual(by_id, by_name)
+        self.assertEqual(by_id["room_id"], "1")
+        self.assertEqual(by_id["name"], "Room A")
+        self.assertEqual(by_id["kind"], "group")
+        self.assertEqual(by_id["weight"], 0.5)  # human weight survives
+        self.assertTrue(by_id["sensors_alive"])
+        self.assertAlmostEqual(by_id["setpoint"], 22.0)
+        self.assertAlmostEqual(by_id["actual"], 20.0)
+        self.assertAlmostEqual(by_id["demand_delta"], 2.0)
+
+    def test_card_unknown_ref(self):
+        card, err = self.hg.card("nope")
+        self.assertIsNone(card)
+        self.assertIn("no such room", err)
+
+    def test_cards_cover_the_whole_registry(self):
+        cards = self.hg.cards()
+        self.assertEqual(len(cards), len(self.hg.weights()))
+        self.assertEqual({c["room_id"] for c in cards},
+                         {w["room_id"] for w in self.hg.weights()})
+
+
 if __name__ == "__main__":
     unittest.main()

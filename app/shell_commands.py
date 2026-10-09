@@ -397,51 +397,95 @@ def register_config_commands(shell, config):
 
 # --------------------------------------------------------------------- heating groups
 
-ROOMS_USAGE = ("usage: rooms [weights | weight <room_id|name> <0..1> | "
-               "forget <room_id|name>]")
+ROOMS_USAGE = ("usage: rooms [<id|name> | all | get <id|name>.<field> | "
+               "set <id|name>.<field> <value> | forget <id|name>]")
+
+ROOM_FIELDS = ("room_id name kind weight sensors_alive last_seen_ms setpoint "
+               "actual demand_delta")
+
+
+def _split_args(args):
+    """Whitespace split honoring double quotes.
+
+    ``set "Clima Dormitor".weight 0.5`` -> ['set', 'Clima Dormitor.weight',
+    '0.5']. Quotes are decorative -- unquoted spaced names still work via
+    the join-the-middle-tokens fallback -- but they read naturally.
+    """
+    out, token, quoted = [], [], False
+    for ch in args:
+        if ch == '"':
+            quoted = not quoted
+        elif ch.isspace() and not quoted:
+            if token:
+                out.append("".join(token))
+                token = []
+        else:
+            token.append(ch)
+    if token:
+        out.append("".join(token))
+    return out
 
 
 def make_rooms_handler(groups):
-    """Return a shell callback for the room aggregate + weights registry.
+    """Return a shell callback for the room registry + live readings.
 
-    Bare ``rooms`` shows the most recent aggregate (the slow CCU3 room pass
-    runs in its own periodic task and caches the result, so this is instant).
-    ``rooms weights`` lists the per-room weights/liveness registry; ``rooms
-    weight <id|name> <0..1>`` sets a room's demand weight; ``rooms forget``
-    manually prunes a room (typically a dead one) from the registry.
+    Resource grammar (mirrors ``config``): bare = the room names, ``all`` =
+    every room card, ``<id|name>`` = one card, ``get/set <id|name>.<field>``
+    = one field (writable: weight), ``forget`` = manual prune. A room card
+    merges the durable registry (weight, liveness) with this pass's
+    readings (setpoint, actual, demand_delta). Room names contain spaces,
+    so refs join all tokens between the verb and the value; the LAST "."
+    splits ref from field (same qualified-ref shape as config).
     """
 
     def handle(args=""):
-        parts = args.split()
+        parts = _split_args(args)
         if not parts:
-            data = groups.last()
-            if data is None:
-                return ("no room data yet (rooms poll runs every rooms_poll_s; "
-                        "see `log`)")
-            return json.dumps(data)
-        sub = parts[0].lower()
-        if sub == "weights" and len(parts) == 1:
-            return json.dumps(groups.weights())
-        if sub == "weight" and len(parts) >= 3:
-            # Room names contain spaces ("Clima Dormitor"): the value is the
-            # last token, everything between is the room ref.
-            ok, message = groups.set_weight(" ".join(parts[1:-1]), parts[-1])
-            return message if ok else "set failed: " + message
-        if sub == "forget" and len(parts) >= 2:
+            return json.dumps([{"id": w["room_id"], "name": w["name"],
+                                "kind": w["kind"]} for w in groups.weights()])
+        head = parts[0].lower()
+        if head == "all":
+            return json.dumps(groups.cards())
+        if head == "forget" and len(parts) >= 2:
             ok, message = groups.forget(" ".join(parts[1:]))
             return message if ok else "forget failed: " + message
-        return ROOMS_USAGE
+        if head in ("weight", "weights"):
+            return ("unknown verb: %s (try: rooms set <id|name>.weight "
+                    "<0..1>)" % head)
+        if head in ("get", "set") and len(parts) >= (3 if head == "set" else 2):
+            ref_field = " ".join(parts[1:-1] if head == "set" else parts[1:])
+            ref, dot, field = ref_field.rpartition(".")
+            if not dot:
+                return "usage: rooms %s <id|name>.<field>" % head
+            card, err = groups.card(ref)
+            if err:
+                return err + " (try: rooms)"
+            field = field.lower()
+            if head == "get":
+                if field not in card:
+                    return "unknown field: %s (fields: %s)" % (
+                        field, ROOM_FIELDS)
+                return json.dumps({"%s.%s" % (card["name"], field):
+                                   card[field]})
+            if field != "weight":
+                return "read-only: %s.%s (writable: weight)" % (ref, field)
+            ok, message = groups.set_weight(ref, parts[-1])
+            return "OK: " + message if ok else "set failed: " + message
+        card, err = groups.card(" ".join(parts))
+        if err:
+            return err + " (try: rooms)"
+        return json.dumps(card)
 
     return handle
 
 
 def register_rooms_commands(shell, groups):
-    """Register the room aggregate viewer on a framework TelnetService."""
+    """Register the room registry/reader command on a framework TelnetService."""
     shell.add(
         "rooms",
         make_rooms_handler(groups),
-        "latest room aggregate (setpoints/actuals + demand); subcommands: "
-        "weights | weight <room_id|name> <0..1> | forget <room_id|name>",
+        "room cards (registry + readings); subcommands: all | get/set "
+        "<id|name>.<field> | forget <id|name>",
     )
 
 
@@ -490,11 +534,17 @@ def _bracket_test_handler(handle, warn):
 
 # ------------------------------------------------------------------- sensors
 
-SENSORS_USAGE = "usage: sensors   # live freshness + last-known readings"
+SENSORS_USAGE = ("usage: sensors [all | weather | demand] "
+                 "(read-only; knobs: config set SENSORS_CONFIG.*)")
 
 
 def make_sensors_handler(sensor_source, rooms, config):
     """Return a shell callback reporting LIVE sensor freshness + readings.
+
+    Resource grammar (mirrors ``config``/``rooms``): bare = the source
+    names, ``all`` = every source card, ``<name>`` = one card. Read-only
+    by design -- the knobs that change these live in
+    ``config SENSORS_CONFIG.*``, and the error says so.
 
     Age and tier are recomputed AT QUERY TIME from the sources' own
     stamps (the per-tick ``state.data_state`` snapshot can lag by up to
@@ -505,25 +555,41 @@ def make_sensors_handler(sensor_source, rooms, config):
     """
 
     def handle(args=""):
-        if args.split():
-            return SENSORS_USAGE
+        parts = args.split()
+        if parts and parts[0].lower() == "set":
+            return ("sensors is read-only (try: config set "
+                    "SENSORS_CONFIG.<key>)")
         now = _now_ms()
         cache_s = int(config.get("sensor_cache_s"))
+        poll_s = int(config.get("ccu3_poll_s"))
         values = (sensor_source.last()
                   if hasattr(sensor_source, "last") else None)
-        weather, weather_age = weather_tier(
-            values, now, config.get("ccu3_poll_s"), cache_s)
+        weather, weather_age = weather_tier(values, now, poll_s, cache_s)
         agg = rooms.last()
         _value, demand_tier, demand_age = pick_demand(
             agg, now, rooms.poll_s, cache_s)
-        return json.dumps({
-            "weather": {"tier": weather, "age_s": weather_age,
+        weather_card = {"source": "weather", "tier": weather,
+                        "age_s": weather_age,
                         "t_out": values[0] if values else None,
-                        "lux": values[1] if values else None},
-            "demand": {"tier": demand_tier, "age_s": demand_age,
-                       "demand_pct": agg.get("demand_pct") if agg else None},
-            "cache_s": cache_s,
-        })
+                        "lux": values[1] if values else None,
+                        "poll_s": poll_s, "cache_s": cache_s}
+        demand_card = {"source": "demand", "tier": demand_tier,
+                       "age_s": demand_age,
+                       "demand_pct": agg.get("demand_pct") if agg else None,
+                       "poll_s": rooms.poll_s, "cache_s": cache_s}
+        if not parts:
+            return json.dumps(["weather", "demand"])
+        if len(parts) == 1:
+            name = parts[0].lower()
+            if name == "all":
+                return json.dumps({"weather": weather_card,
+                                   "demand": demand_card})
+            if name == "weather":
+                return json.dumps(weather_card)
+            if name == "demand":
+                return json.dumps(demand_card)
+            return "unknown source: %s (try: sensors)" % parts[0]
+        return SENSORS_USAGE
 
     return handle
 
@@ -533,5 +599,6 @@ def register_sensors_commands(shell, sensor_source, rooms, config):
     shell.add(
         "sensors",
         make_sensors_handler(sensor_source, rooms, config),
-        "live sensor freshness + last-known readings (tiers, ages, values)",
+        "live sensor cards (tier, age, last-known readings); bare lists "
+        "sources, all | weather | demand show cards",
     )

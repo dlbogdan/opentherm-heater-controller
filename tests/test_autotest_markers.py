@@ -2,7 +2,7 @@
 
 The proof suites deliberately inject WARN-level faults, so /log.txt can
 look like a failing board while tests run. AutotestMarkerShell brackets
-``test run`` with start/end markers (and only that -- ``test list`` and
+``test run`` with start/end markers (and only that -- a bare ``test`` and
 the usage line inject nothing), so test evidence is distinguishable from
 field events by reading the log alone.
 """

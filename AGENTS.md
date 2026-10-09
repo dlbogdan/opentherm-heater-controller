@@ -67,7 +67,7 @@ python micropy-system/tools/target/telnet.py 10.9.30.76 selftest
 python micropy-system/tools/target/telnet.py 10.9.30.76 transport status   # audit ring
 python micropy-system/tools/target/telnet.py 10.9.30.76 config            # section names; 'config all' for the dump
 python micropy-system/tools/target/telnet.py 10.9.30.76 config set HEATING_PARAMS.t_on 15
-python micropy-system/tools/target/telnet.py 10.9.30.76 test list          # device test suites
+python micropy-system/tools/target/telnet.py 10.9.30.76 test              # device test suites (bare lists)
 python micropy-system/tools/target/telnet.py 10.9.30.76      # interactive (try 'repl')
 python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 # or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
@@ -317,7 +317,7 @@ right one:
   `Autotests: TESTING IN PROGRESS -- what follows might not represent real
   events` / `Autotests: testing ended`. **WARNs between those markers are
   test evidence, not field events** — read the markers before diagnosing
-  from a log that follows a `test run`. `test list` is not bracketed.
+  from a log that follows a `test run`. A bare `test` (the listing) is not bracketed.
 
 Do **not** "improve" a periodic INFO log back into the file — that is exactly
 the flash wear this policy avoids. Boot evidence is the OTA process (framework,
@@ -379,6 +379,24 @@ file in any other shape (e.g. a legacy `CONTROL` blob) is simply re-seeded
 from the shipped defaults, or re-provisioned with the sectioned
 `app-config.json`. Do not move keys between sections without updating
 `config_schema.py` (both JSON files + the autotest pins key off it).
+
+**Shell resource grammar (2026-10-09, fw 1.1.104):** `config`, `rooms` and
+`sensors` share ONE shape (the `config` grammar generalized): bare command =
+the NAMES that exist; `all` = every item; `<NAME>` = one item; `get/set
+<NAME>.<field> [VALUE]` = field-level access; genuine actions stay verbs
+(`config reset`, `rooms forget`, `test run`). Ref mechanics: the LAST `.`
+splits ref from field; room names with spaces accept decorative quotes
+(`rooms set "Clima Dormitor".weight 0.5`) and still work unquoted (all
+tokens between verb and value are the ref); section/field/key matching is
+case-insensitive, canonical spelling echoed. `sensors` is READ-ONLY (its
+`set` error points at the `SENSORS_CONFIG.*` key that actually changes the
+behavior); `rooms` is the hybrid: registry knobs (`weight`) + live readings
+in one card. NO aliases for the old subcommands (`rooms weights`, `rooms
+weight`, `config list` are gone -- owner decision, early development). The
+framework runner follows the same shape (bare `test` = list, `test run`
+unchanged) but lives in `micropy-system`: the board's `/lib/coresys` only
+refreshes at provisioning or a USB `autotest.py push`, so a network OTA
+does NOT update the `test` grammar.
 
 **Auth (per RPC session):**
 1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
@@ -522,8 +540,11 @@ tick. `rooms_rediscovery_s` (default 3600) re-runs discovery on a valid-but-
 stale cache so device loss surfaces without a reboot; a failed refresh keeps
 the previous room list. The rooms cache schema now carries `room_id`+`kind`
 (an old-schema cache is rejected → one re-discovery after upgrade). Shell
-surface: `rooms weights`, `rooms weight <id|name> <0..1>`, `rooms forget
-<id|name>` — names contain spaces, so the value is the LAST token.
+surface (resource grammar, see below): bare `rooms` = the room names,
+`rooms all` = every card, `rooms <id|name>` = one card (registry + this
+pass's readings: `setpoint`/`actual`/`demand_delta` from the aggregate's
+`room_data` map), `rooms get/set <id|name>.<field>` (writable: `weight`),
+`rooms forget <id|name>`.
 
 The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
 `asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so

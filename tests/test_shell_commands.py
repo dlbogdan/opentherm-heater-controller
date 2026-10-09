@@ -47,13 +47,44 @@ class Rooms:
         return self._agg
 
 
-def query(sensor_values, agg, cache_s=14400, poll_s=60):
+def query(sensor_values, agg, cache_s=14400, poll_s=60, args="all"):
     cfg = Cfg(sensor_cache_s=cache_s, ccu3_poll_s=poll_s)
     handle = make_sensors_handler(Src(sensor_values), Rooms(agg), cfg)
-    return json.loads(handle())
+    return json.loads(handle(args))
 
 
 class SensorsCommandTests(unittest.TestCase):
+    def test_bare_lists_source_names(self):
+        out = query((8.5, 12000.0, _now_ms()), {"demand_pct": 4.2}, args="")
+        self.assertEqual(out, ["weather", "demand"])
+
+    def test_weather_card_stands_alone(self):
+        out = query((8.5, 12000.0, _now_ms()), {"demand_pct": 4.2},
+                    args="weather")
+        self.assertEqual(out["source"], "weather")
+        self.assertEqual(out["t_out"], 8.5)
+        self.assertEqual(out["poll_s"], 60)
+        self.assertEqual(out["cache_s"], 14400)
+
+    def test_demand_card_stands_alone(self):
+        out = query(None, {"demand_pct": 4.2, "ts": _now_ms()}, args="demand")
+        self.assertEqual(out["source"], "demand")
+        self.assertEqual(out["demand_pct"], 4.2)
+        self.assertEqual(out["poll_s"], 120)  # Rooms.poll_s
+
+    def test_unknown_source_points_at_bare(self):
+        cfg = Cfg(sensor_cache_s=14400, ccu3_poll_s=60)
+        handle = make_sensors_handler(Src(None), Rooms(None), cfg)
+        self.assertEqual(handle("bogus"),
+                         "unknown source: bogus (try: sensors)")
+
+    def test_set_is_rejected_with_config_pointer(self):
+        cfg = Cfg(sensor_cache_s=14400, ccu3_poll_s=60)
+        handle = make_sensors_handler(Src(None), Rooms(None), cfg)
+        out = handle("set weather.poll_s 30")
+        self.assertIn("read-only", out)
+        self.assertIn("config set SENSORS_CONFIG", out)
+
     def test_fresh_shows_tiers_values_and_small_ages(self):
         now = _now_ms()
         out = query((8.5, 12000.0, now), {"demand_pct": 4.2, "ts": now})
@@ -63,7 +94,7 @@ class SensorsCommandTests(unittest.TestCase):
         self.assertLessEqual(out["weather"]["age_s"], 1)
         self.assertEqual(out["demand"]["tier"], "fresh")
         self.assertEqual(out["demand"]["demand_pct"], 4.2)
-        self.assertEqual(out["cache_s"], 14400)
+        self.assertEqual(out["weather"]["cache_s"], 14400)
 
     def test_age_is_live_not_the_tick_snapshot(self):
         # A stamp 300 s old must report ~300 s of age at query time,
@@ -88,7 +119,7 @@ class SensorsCommandTests(unittest.TestCase):
     def test_no_sources_report_none_without_crashing(self):
         cfg = Cfg(sensor_cache_s=14400, ccu3_poll_s=60)
         handle = make_sensors_handler(NoLastSrc(), Rooms(None), cfg)
-        out = json.loads(handle())
+        out = json.loads(handle("all"))
         self.assertEqual(out["weather"]["tier"], "none")
         self.assertIsNone(out["weather"]["t_out"])
         self.assertEqual(out["demand"]["tier"], "none")
@@ -97,7 +128,7 @@ class SensorsCommandTests(unittest.TestCase):
     def test_extra_args_return_usage(self):
         cfg = Cfg(sensor_cache_s=14400, ccu3_poll_s=60)
         handle = make_sensors_handler(Src(None), Rooms(None), cfg)
-        self.assertEqual(handle("whatever"), SENSORS_USAGE)
+        self.assertEqual(handle("weather extra"), SENSORS_USAGE)
 
 
 if __name__ == "__main__":

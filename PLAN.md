@@ -343,6 +343,20 @@ migration (owner decision: early development, no field fleet -- a wrong-shape
 file is re-seeded/re-provisioned; the one-shot migration shipped in 1.1.97
 was removed in 1.1.102). Both JSON config files rewritten to the layout.
 
+Addendum 3 (fw 1.1.104, owner request): `rooms`/`sensors`/`test` redesigned
+onto the `config` resource grammar -- bare command = the names, `all` =
+every item, `<NAME>` = one item, `get/set <NAME>.<field> [VALUE]`, actions
+stay verbs (`rooms forget`, `test run`). Room cards merge the durable
+registry (weight/liveness) with this pass's readings (new `room_data` map
+in the poll aggregate: room_id -> sp/act); only `weight` is writable.
+`sensors` = weather/demand source cards, read-only by design (its `set`
+error points at `SENSORS_CONFIG.*`). Quote-aware refs for spaced names
+(decorative quotes, unquoted fallback kept); last-dot field split;
+case-insensitive everywhere. NO aliases for the old subcommands (owner
+decision, early development). Framework: bare `test` lists suites (was:
+run everything -- safer), `test list` dropped; board `/lib/coresys` picks
+this up only at provisioning/USB push, not via OTA.
+
 
 - **New `room_source` value `"heating_groups+etrvs"`**: per room, use the
   HEATING group if present, else that room's eTRV average; a room with both
