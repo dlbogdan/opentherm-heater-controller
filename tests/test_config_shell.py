@@ -148,6 +148,23 @@ class ConfigHandlerTests(unittest.TestCase):
         self.assertEqual(json.loads(self.handle("get HEATING_PARAMS.t_on")),
                          {"HEATING_PARAMS.t_on": 13.0})
 
+    def test_get_section_case_insensitive(self):
+        self.assertEqual(json.loads(self.handle("get boiler.transport")),
+                         {"BOILER.transport": "otgw_dummy"})
+
+    def test_get_key_case_insensitive_echoes_canonical_spelling(self):
+        self.assertEqual(json.loads(self.handle("get BOILER.TRANSPORT")),
+                         {"BOILER.transport": "otgw_dummy"})
+
+    def test_set_case_insensitive_echoes_canonical_spelling(self):
+        self.assertIn("OK: SHELL.net_port = 8080",
+                      self.handle("set shell.NET_PORT 8080"))
+        self.assertEqual(self.config.get("net_port"), 8080)
+
+    def test_flat_hint_matches_any_case(self):
+        self.assertIn("use the qualified form: HEATING_PARAMS.t_on",
+                      self.handle("get T_ON"))
+
     def test_get_flat_key_suggests_qualified_form(self):
         self.assertIn("use the qualified form: HEATING_PARAMS.t_on",
                       self.handle("get t_on"))

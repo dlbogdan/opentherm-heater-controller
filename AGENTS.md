@@ -367,7 +367,9 @@ framework-free **`app/config_schema.py`** (single source of truth,
 host-tested); `config.py` wraps it. Keys are GLOBALLY UNIQUE, so every call
 site keeps the flat API (`config.get("t_on")`); the shell qualifies refs
 (`config get HEATING_PARAMS.t_on`, `config set SHELL.net_port 23`) and
-flat refs are rejected with a hint naming the qualified form. Listings:
+flat refs are rejected with a hint naming the qualified form. Section AND
+key matching is case-insensitive everywhere (listings, get, set, reset);
+replies echo the canonical schema spelling. Listings:
 bare `config` = section names, `config all` = grouped dump, `config
 <SECTION>` = one section -- assembled as JSON TEXT in the schema's
 source-declared order (`SECTION_ORDER`/`SECTION_KEYS`; MicroPython dicts are

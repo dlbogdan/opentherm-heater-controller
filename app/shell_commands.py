@@ -304,21 +304,29 @@ def make_config_handler(config):
     for section, keys in config.sections.items():
         for key in keys:
             key_section[key] = section
+    key_lower = dict((k.lower(), k) for k in defaults)
 
     def resolve(ref):
-        """'SECTION.KEY' -> (section, key, None) or (None, None, error)."""
+        """'SECTION.KEY' -> (SECTION, canonical key, None) or an error.
+
+        Case-insensitive on BOTH parts (like the ``config <SECTION>``
+        listing); the canonical schema spelling is what gets echoed back.
+        """
         section, dot, key = ref.partition(".")
         if not dot:
-            if ref in key_section:
+            canon = key_lower.get(ref.lower())
+            if canon is not None:
                 return None, None, ("use the qualified form: %s.%s"
-                                    % (key_section[ref], ref))
+                                    % (key_section[canon], canon))
             return None, None, "unknown config key: %s" % ref
+        section = section.upper()
         if section not in config.sections:
             return None, None, "unknown section: %s (sections: %s)" % (
                 section, ", ".join(config.section_order))
-        if key not in config.sections[section]:
+        canon = key_lower.get(key.lower())
+        if canon is None or canon not in config.sections[section]:
             return None, None, "unknown config key: %s" % ref
-        return section, key, None
+        return section, canon, None
 
     def handle(args=""):
         parts = args.split()
@@ -337,24 +345,26 @@ def make_config_handler(config):
             section, key, err = resolve(parts[1])
             if err:
                 return err
-            return json.dumps({parts[1]: _shown(key, config.get(key))})
+            return json.dumps({"%s.%s" % (section, key):
+                               _shown(key, config.get(key))})
 
         if command == "set" and len(parts) == 3:
             section, key, err = resolve(parts[1])
             if err:
                 return err
+            ref = "%s.%s" % (section, key)  # canonical echo (case-insensitive in)
             ok, value = _coerce(defaults[key], parts[2])
             if not ok:
-                return "set failed for %s: %s" % (parts[1], value)
+                return "set failed for %s: %s" % (ref, value)
             config.set(key, value)
             problems = config.validate()
             current = config.get(key)
             if current == value:
                 note = ("" if not problems
                         else " (also repaired: %s)" % "; ".join(problems))
-                return "OK: %s = %s%s" % (parts[1], _shown(key, current), note)
+                return "OK: %s = %s%s" % (ref, _shown(key, current), note)
             return ("REJECTED: %s = %s is invalid; reset to %s. %s"
-                    % (parts[1], _shown(key, value), _shown(key, current),
+                    % (ref, _shown(key, value), _shown(key, current),
                        "; ".join(problems)))
 
         if command == "reset" and len(parts) == 2:
@@ -363,8 +373,8 @@ def make_config_handler(config):
                 return err
             config.set(key, defaults[key])
             problems = config.validate()
-            return "OK: %s reset to %s%s" % (
-                parts[1], _shown(key, config.get(key)),
+            return "OK: %s.%s reset to %s%s" % (
+                section, key, _shown(key, config.get(key)),
                 "" if not problems else " (repaired: %s)" % "; ".join(problems))
 
         section = command.upper()
