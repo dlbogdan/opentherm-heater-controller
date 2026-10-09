@@ -150,7 +150,7 @@ re-verify before trusting them elsewhere.
 - **Fix:** `time.ticks_diff` or the app's `control.util.elapsed_ms` (same
   semantics; clamp where a negative elapsed is impossible). All
   elapsed-time arithmetic goes through signed uint32 tick diffs.
-- **Provenance:** fixed `556b9df` (2026-10-05); pinned by
+- **Provenance:** fixed `efd27cf` (2026-10-05); pinned by
   `tests/test_time_wrap.py`.
 
 ### `/log.txt` timestamps are NOT wall-clock

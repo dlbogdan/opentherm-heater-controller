@@ -685,17 +685,17 @@ Consequences for this codebase (do not "fix" them away):
 - Boiler transport abstraction: commit `f8fca84`, device firmware `1.1.14`.
   The log transport's ON -> release -> stale-setpoint reset -> ON command
   sequence passed on host and through the Pico network console.
-- Non-blocking CCU3 room model: app commit `e1a8f7f`, device firmware `1.1.57`
+- Non-blocking CCU3 room model: app commit `707a229`, device firmware `1.1.57`
   (framework `7ee5e40`). The CCU3 client is async (uasyncio); the room pass
   (7 heating-group rooms / 12 eTRV rooms) runs as its own periodic task
   (`rooms_poll_s`) and caches the aggregate; the control loop reads the cached
   demand; `rooms` returns the cache. Verified on-device: selftest 33/33, rooms
   demand 4.29%, weather live, no ENOMEM, no event-loop stall.
 - Review-fix milestones (firmware 1.1.67-1.1.69): wrap-safe time arithmetic
-  `556b9df` (1.1.67; selftest 34/34 + live actuation probe); off-sentinel
-  OTGW contract `97217fc` (1.1.68; `off_sentinel` 0.0 + validate-repair --
+  `efd27cf` (1.1.67; selftest 34/34 + live actuation probe); off-sentinel
+  OTGW contract `66b0057` (1.1.68; `off_sentinel` 0.0 + validate-repair --
   a board-persisted 20.0 self-healed live, visible in `/log.txt`);
-  `transport demo` safety gate `dccc319` (1.1.69; demo still runs on the
+  `transport demo` safety gate `e6e851b` (1.1.69; demo still runs on the
   dummy, the contract refuses real drivers before any write). Host suite
   118 green throughout.
 - Real OTGW driver `app/transport/otgw.py` (firmware 1.1.70-1.1.73):

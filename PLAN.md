@@ -269,7 +269,7 @@ Done (firmware 1.1.91, `--debug`, slot b; host suite 185 green):
 - [x] `otgw_capture.py` → committed as `otgw-stream-capture.py` (renamed for
   clarity): read-only mirror of the OTGW TCP 12700 stream, the host-side
   diagnostic for the pending live-gateway validation. AGENTS.md OTGW section
-  points at it. (Separate commit `6689bab`, host-only, no deploy.)
+  points at it. (Separate commit `f9c89b9`, host-only, no deploy.)
 
 Deferred to separate discussions (owner decision 2026-10-09):
 
