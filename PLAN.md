@@ -273,37 +273,76 @@ Done (firmware 1.1.91, `--debug`, slot b; host suite 185 green):
 
 Deferred to separate discussions (owner decision 2026-10-09):
 
-- Demand parity caveat (item 5): the ReGaHk provenance script iterates
-  **physical WTH/STHD/STH devices** and counts each transceiver channel; the
-  firmware (`room_source=heating_groups`) iterates **HmIP-HEATING groups**
-  (one per room with a WTH) and reads the group's `:1` channel. Identical
-  only while each room has exactly one WTH-type thermostat and one group
-  (true in this house). To be documented in `heating_groups.py` and/or
-  AGENTS.md — discuss the exact wording/scope separately.
+- Demand parity caveat (item 5): **folded into P6a's parity doc** (the room
+  model is touched there). The ReGaHk provenance script iterates **physical
+  WTH/STHD/STH devices** and counts each transceiver channel; the firmware
+  (`room_source=heating_groups`) iterates **HmIP-HEATING groups** (one per
+  room with a WTH) and reads the group's `:1` channel. Identical only while
+  each room has exactly one WTH-type thermostat and one group (true in this
+  house). Documented in `heating_groups.py` + AGENTS.md as part of P6a.
 - `lux_source` (item 6): currently inert (only in `config.py` DEFAULTS +
   validate enum; never read — `t_out_source`/`room_source` ARE wired). NOT
   to be dropped: it is the reserved selector for future multi-source lux
   (e.g. Bluetooth). Discuss the reserved-key documentation separately.
 
-## P5 — Housekeeping (host-only, one commit, no deploy)
+## P6 — Union room source + per-room weights registry (deploy-verified)
 
-- `app/rooms.py:4` docstring: the demand scale is 0..100 percent, not 0..1.
-- `config` shell dump: mask `ccu3_pass` (and any `*_pass` / `*_token` key) in
-  `config` / `config get` output (`app/shell_commands.py`) — the telnet shell
-  is unauthenticated on the LAN.
-- `_run_selftest`: remove the inserted `sys.path` entries in `finally`
-  (`app/main.py:118-122` grows `sys.path` by two per invocation).
-- `otgw_capture.py` (untracked at the repo root): commit as a documented
-  debug tool — a read-only mirror of the OTGW's TCP 12700 stream, directly
-  useful for the pending live-gateway validation — or delete it.
-- Demand parity caveat: the ReGaHk provenance script's denominator counts
-  WTH/STH transceiver channels *per device*; the firmware counts one
-  HmIP-HEATING group *per WTH room*. Identical only while each room has
-  exactly one WTH and one group (true in this house). Note it in
-  `heating_groups.py` and/or AGENTS.md.
-- `lux_source` config key is inert (lux always rides the weather device,
-  `app/sensors.py:46-47`): document it as reserved in the `config.py`
-  DEFAULTS comment, or drop the key.
+Owner decisions 2026-10-09 (all confirmed). Adds a third `room_source` and a
+durable per-room weights/liveness registry. This supersedes the P5 item-5
+parity caveat (folded into P6a's doc).
+
+### P6a — union mode + weights registry + weighted demand
+
+- **New `room_source` value `"heating_groups+etrvs"`**: per room, use the
+  HEATING group if present, else that room's eTRV average; a room with both
+  counts once (group wins). Discovery already builds both sets, so the union
+  is `groups ∪ (eTRV rooms whose room has no group)`. Tag each active room
+  `kind` = `group` | `etrv`.
+- **New durable file `/room-weights-config.json`** (separate from the
+  disposable `/ccu3_rooms_cache.json`): keyed by CCU **`room_id`** (stable
+  across device replacement and renames; `name` stored for display). Entry:
+  `{name, kind, weight [0..1], sensors_alive bool, last_seen_ms}` (uptime-based
+  stamp — the `/log.txt` gotcha). Atomic `.new`→rename write, like the rooms
+  cache.
+- **Reconciliation on discovery:** new room → add (`weight 1.0`, alive true);
+  known+present → refresh `name`/`kind`/`last_seen_ms`, keep the human
+  `weight`; known+gone → `sensors_alive=false`, **keep the entry + weight** (a
+  dead battery must not erase the tuning). Automatic reconciliation NEVER
+  deletes; the user may **manually prune** a dead room (`rooms forget`).
+- **Liveness = discovery presence only.** A transient poll read failure skips
+  the room for that tick WITHOUT flipping the flag (hysteresis for free).
+  Liveness flips are edge-triggered, one WARN line (the P4 pattern) — no flash
+  storm.
+- **Weighted alive-only demand:**
+  `demand_pct = (Σ_{alive} w_r·delta_r[demanding] / Σ_{alive} w_r) / delta_cap × 100`.
+  A dead room is in neither sum (safely skipped); `weight 0` = alive-but-muted;
+  all weights 1.0 == today (parity default). Orthogonal to the P4 aggregate
+  freshness tier (that gates whether we trust the snapshot; this gates which
+  rooms compose it).
+- **Config:** `room_source` enum gains the new value; the weights live in the
+  JSON file, NOT in `app-config.json`.
+- **Telnet surface (v1):** `rooms weights` (list the registry), `rooms weight
+  <room_id|name> <0..1>` (set + persist), `rooms forget <room_id|name>`
+  (manual prune of a dead room).
+- **Flash discipline:** write the registry only on change (add / liveness flip
+  / human edit), never per poll.
+- **Parity doc (folds in P5 item 5):** note in `heating_groups.py` + AGENTS.md
+  that the firmware reads HEATING-group aggregates (WTH-presence filtered)
+  while the HA provenance script read WTH channels; identical only at
+  1-WTH-1-group-per-room; the union mode + weights are a deliberate divergence
+  (default weight 1.0 preserves parity).
+- **Tests:** host — extend `FakeCcu3` with a group-less eTRV room + a both-room;
+  assert union membership, weighted demand at 0.4 vs 1.0, reconciliation
+  never-delete, and `forget`. Device autotest — live: union surfaces the extra
+  group-less rooms, `rooms weights`/`rooms weight` round-trip, and `demand_pct`
+  shifts with the weight.
+
+### P6b — later (not scheduled)
+
+- MQTT + local UI editing of the registry (same file/keys).
+- Per-valve liveness detail.
+- Resilience: if a room's group dies, fall back to that room's eTRVs instead of
+  just flagging it dead.
 
 ---
 
