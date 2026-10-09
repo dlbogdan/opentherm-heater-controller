@@ -330,15 +330,18 @@ PROGRESS -- what follows might not represent real events` / `Autotests:
 testing ended` (`AutotestMarkerShell` in `shell_commands.py`, wrapped around
 the runner registration in `main.py`; host-pinned + verified live).
 
-Addendum 2 (fw 1.1.97, owner request): `/app-config.json` reorganized from
-the single `CONTROL` blob into six semantic sections (`HEATING_PARAMS`,
-`SENSORS_CONFIG` incl. ALL cadences + `demand_delta_cap`, `SENSORS_CONNECTION`
-for per-backend credentials, `BOILER`, `MQTT`, `SHELL`). Schema + defaults +
-key->section map + one-time migration live in the new framework-free
-`app/config_schema.py`; keys stay globally unique (flat `get/set/reset`
-unchanged), listings grouped via `config list [SECTION]`. Legacy `CONTROL`
-values migrate (calibration preserved -- verified live) and the section is
-deleted. Both JSON config files rewritten to the new layout.
+Addendum 2 (fw 1.1.97-1.1.101, owner request): `/app-config.json`
+reorganized from the single `CONTROL` blob into six semantic sections
+(`HEATING_PARAMS`, `SENSORS_CONFIG` incl. ALL cadences + `demand_delta_cap`,
+`SENSORS_CONNECTION` for per-backend credentials, `BOILER`, `MQTT`, `SHELL`).
+Schema + defaults + key->section map + display order live in the new
+framework-free `app/config_schema.py` (tuple-of-pairs spec -- device dicts
+are hash-ordered, see MICROPYTHON-GOTCHAS). Shell grammar: bare `config` =
+section names, `all` = grouped dump, `<SECTION>` = one section,
+`get/set/reset SECTION.KEY` (flat refs rejected with a hint). NO legacy
+migration (owner decision: early development, no field fleet -- a wrong-shape
+file is re-seeded/re-provisioned; the one-shot migration shipped in 1.1.97
+was removed in 1.1.102). Both JSON config files rewritten to the layout.
 
 
 - **New `room_source` value `"heating_groups+etrvs"`**: per room, use the

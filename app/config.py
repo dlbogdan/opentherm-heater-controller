@@ -11,11 +11,11 @@ Since 2026-10-09 the file is GROUPED into semantic sections (HEATING_PARAMS,
 SENSORS_CONFIG, SENSORS_CONNECTION, BOILER, MQTT, SHELL). The layout, the
 defaults and the key->section map live in the framework-free
 ``config_schema`` module (host-testable, single source of truth). Keys stay
-globally unique, so every call site and the shell keep the flat
-``config.get("t_on")`` API -- only the file layout and the bare ``config``
-listing are grouped. A pre-sections board is migrated ONCE at construction:
-legacy ``CONTROL`` values move to their section (the tuned calibration is
-preserved), then the legacy section is dropped.
+globally unique, so every call site keeps the flat ``config.get("t_on")``
+API; the shell qualifies refs (``config get HEATING_PARAMS.t_on``) and only
+listings are grouped. There is NO layout migration (early development, no
+field fleet): a board file in any other shape is re-seeded from the shipped
+defaults or re-provisioned with the sectioned ``app-config.json``.
 
 This module is device-only: it depends on the micropy-system framework. (The
 pure schema in ``config_schema.py`` and the control core in ``control/`` stay
@@ -25,8 +25,8 @@ framework-free so they can be unit-tested on a host.)
 import lib.coresys.logger as logger
 from lib.coresys.manager_config import ConfigManager
 
-from config_schema import (DEFAULTS, KEY_SECTION, LEGACY_SECTION, SECTIONS,
-                           migrate_legacy)
+from config_schema import (DEFAULTS, KEY_SECTION, SECTIONS, SECTION_KEYS,
+                           SECTION_ORDER)
 
 # App-owned runtime config (the file the app/user edits most). Named to pair
 # with the framework's /system-config.json; both live outside the A/B slots
@@ -39,16 +39,6 @@ class Config:
 
     def __init__(self, filename=CONFIG_FILE):
         self._cm = ConfigManager(filename)
-        # One-time layout migration (pre-sections firmware persisted every
-        # key under a single CONTROL section). Runs BEFORE any get(): the
-        # tuned values must land in their new sections rather than being
-        # re-seeded from DEFAULTS. One flash write, then CONTROL is gone.
-        moved = migrate_legacy(self._cm.config)
-        if moved is not None:
-            self._cm.save_config()
-            logger.info("Config: migrated legacy %s section (%d keys into "
-                        "%d sections)" % (LEGACY_SECTION, moved,
-                                          len(SECTIONS)))
 
     def get(self, key, override_default=None):
         """Return a parameter by key, seeding its default if absent.
@@ -85,12 +75,22 @@ class Config:
 
     @property
     def sections(self):
-        """Section name -> its keys (the grouped display order for the shell).
+        """Section name -> its keys (the schema grouping for the shell).
 
         Values are the shipped defaults; the shell reads current values via
         ``all()`` and uses this only for grouping.
         """
         return SECTIONS
+
+    @property
+    def section_order(self):
+        """Deterministic section display order (dicts are unordered on-device)."""
+        return SECTION_ORDER
+
+    @property
+    def section_keys(self):
+        """Section -> its keys in display order (source-declared, not dict)."""
+        return SECTION_KEYS
 
     def validate(self):
         """Validate types, domains, and §6 cross-key constraints.

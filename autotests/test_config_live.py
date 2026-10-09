@@ -39,7 +39,12 @@ class TestConfigInvariants(unittest.TestCase):
 
 
 class TestConfigSections(unittest.TestCase):
-    """The sectioned /app-config.json layout (post-migration invariant)."""
+    """The expected /app-config.json shape (sectioned; no legacy CONTROL).
+
+    There is no layout migration on purpose (early development): a stray
+    CONTROL section means a stale/provisioned-with-old file, which this
+    pin surfaces rather than silently tolerating.
+    """
 
     def _raw(self):
         with open("/app-config.json") as handle:

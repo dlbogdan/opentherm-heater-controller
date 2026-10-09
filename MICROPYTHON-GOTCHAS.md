@@ -112,6 +112,20 @@ re-verify before trusting them elsewhere.
   `__code__`, then `__func__` — before the on-device exec probe settled
   it). Host pins: opaque-handler streaming + register declares/falls back.
 
+### dict iteration is HASH-ordered (CPython preserves insertion order)
+- **Reality:** on-device, iterating a dict — and therefore
+  `json.dumps(some_dict)` — yields hash order, not insertion order.
+  CPython 3.7+ preserves insertion order, so host runs and host tests
+  look perfectly ordered while the device scrambles them. Verified live
+  (2026-10-09, fw 1.1.99): the sectioned `config all` listing came out
+  `BOILER, SENSORS_CONFIG, HEATING_PARAMS, ...` instead of the schema
+  order, even though the host listing was correct.
+- **Fix:** when display order matters, keep an explicit order tuple
+  (`config_schema.SECTION_ORDER`) and assemble JSON as TEXT in that
+  order (`_grouped_json` / `_section_json` in `shell_commands.py`) —
+  never dump an intermediate dict. Pin the RAW string in host tests
+  (`json.loads` erases the evidence).
+
 ### The autotest `unittest` shim: `assertAlmostEqual` has NO `delta=` kwarg
 - **Symptom:** an autotest passes the whole host suite, then ERRORs
   on-device with `TypeError: unexpected keyword argument 'delta'` — after

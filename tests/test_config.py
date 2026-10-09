@@ -10,14 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "app" / "config.py"
 
 
-INITIAL_CONFIG = {}  # test hook: pre-populated raw file for the fake manager
-
-
 class _ConfigManager:
     """Faithful stand-in for the framework manager (config-dict based)."""
 
     def __init__(self, _filename):
-        self.config = dict(INITIAL_CONFIG)
+        self.config = {}
         self.saved = 0
 
     def save_config(self):
@@ -225,25 +222,6 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(values["control_tick_s"], module.DEFAULTS["control_tick_s"])
         self.assertIn("control_tick_s",
                       self.config._cm.config[module.KEY_SECTION["control_tick_s"]])
-
-    def test_legacy_control_section_migrates_at_construction(self):
-        # A pre-sections board file (everything under CONTROL) must land in
-        # the new sections with its TUNED values, persisted once, and the
-        # legacy section must be gone -- before any get() can re-seed
-        # defaults over the calibration.
-        global INITIAL_CONFIG
-        INITIAL_CONFIG = {self.module.LEGACY_SECTION: {
-            "t_on": 15, "ccu3_pass": "s", "bogus_key": 1}}
-        try:
-            cfg = self.module.Config("test.json")
-        finally:
-            INITIAL_CONFIG = {}
-        self.assertNotIn(self.module.LEGACY_SECTION, cfg._cm.config)
-        self.assertEqual(cfg._cm.config["HEATING_PARAMS"]["t_on"], 15)
-        self.assertEqual(cfg._cm.config["SENSORS_CONNECTION"]["ccu3_pass"], "s")
-        self.assertNotIn("bogus_key", cfg._cm.config.get("HEATING_PARAMS", {}))
-        self.assertEqual(cfg._cm.saved, 1, "persisted exactly once")
-        self.assertEqual(cfg.get("t_on"), 15, "reads the migrated value")
 
 
 if __name__ == "__main__":

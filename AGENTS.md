@@ -65,8 +65,8 @@ python micropy-system/tools/target/telnet.py 10.9.30.76 status
 python micropy-system/tools/target/telnet.py 10.9.30.76 log 40
 python micropy-system/tools/target/telnet.py 10.9.30.76 selftest
 python micropy-system/tools/target/telnet.py 10.9.30.76 transport status   # audit ring
-python micropy-system/tools/target/telnet.py 10.9.30.76 config            # app config (JSON)
-python micropy-system/tools/target/telnet.py 10.9.30.76 config set t_on 15
+python micropy-system/tools/target/telnet.py 10.9.30.76 config            # section names; 'config all' for the dump
+python micropy-system/tools/target/telnet.py 10.9.30.76 config set HEATING_PARAMS.t_on 15
 python micropy-system/tools/target/telnet.py 10.9.30.76 test list          # device test suites
 python micropy-system/tools/target/telnet.py 10.9.30.76      # interactive (try 'repl')
 python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
@@ -365,13 +365,18 @@ adds its own prefixed keys), `BOILER` (transport + OTGW link), `MQTT`,
 `SHELL` (`net_*`). The layout + defaults + key->section map live in the
 framework-free **`app/config_schema.py`** (single source of truth,
 host-tested); `config.py` wraps it. Keys are GLOBALLY UNIQUE, so every call
-site and the shell keep the flat API (`config get t_on`); only listings are
-grouped (`config list [SECTION]`). A pre-sections board (everything under
-the legacy `CONTROL`) is migrated ONCE at `Config` construction: tuned
-values move to their sections (the HA calibration survives -- verified live),
-unknown keys are dropped, `CONTROL` is deleted. Do not re-add a `CONTROL`
-section or move keys between sections without updating `config_schema.py`
-(the migration + both JSON files + the autotest pins key off it).
+site keeps the flat API (`config.get("t_on")`); the shell qualifies refs
+(`config get HEATING_PARAMS.t_on`, `config set SHELL.net_port 23`) and
+flat refs are rejected with a hint naming the qualified form. Listings:
+bare `config` = section names, `config all` = grouped dump, `config
+<SECTION>` = one section -- assembled as JSON TEXT in the schema's
+source-declared order (`SECTION_ORDER`/`SECTION_KEYS`; MicroPython dicts are
+hash-ordered, see MICROPYTHON-GOTCHAS). There is **NO layout migration**
+(owner decision 2026-10-09: early development, no field fleet): a board
+file in any other shape (e.g. a legacy `CONTROL` blob) is simply re-seeded
+from the shipped defaults, or re-provisioned with the sectioned
+`app-config.json`. Do not move keys between sections without updating
+`config_schema.py` (both JSON files + the autotest pins key off it).
 
 **Auth (per RPC session):**
 1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
@@ -753,17 +758,19 @@ Consequences for this codebase (do not "fix" them away):
   unmistakably test evidence. Verified live: `test run control_net` logged
   start marker -> sentinel `Control: tick failed: control-net live demo` ->
   end marker; `test list` logged nothing. Host suite 208 green.
-- Sectioned `/app-config.json` (firmware 1.1.97): six semantic sections
-  (`HEATING_PARAMS`, `SENSORS_CONFIG`, `SENSORS_CONNECTION`, `BOILER`,
-  `MQTT`, `SHELL`) defined in the new framework-free `app/config_schema.py`
-  (defaults + key->section map + one-time legacy `CONTROL` migration that
-  preserves tuned values and drops the legacy section). Keys stay globally
-  unique so `config get/set/reset` keep flat syntax; listings are grouped
-  (`config list [SECTION]`). Live: migration preserved the HA calibration
-  (t_on 19 / curve_base 29 / demand_rate 3.8), `config` grouped + masked,
-  autotest `test run config` 8/8 incl. new section-layout pins. Host suite
-  223 green. Local `app-config.json` + `app-config.example.json` rewritten
-  to the section layout.
+- Sectioned `/app-config.json` + new shell grammar (firmware 1.1.97-1.1.101):
+  six semantic sections (`HEATING_PARAMS`, `SENSORS_CONFIG`,
+  `SENSORS_CONNECTION`, `BOILER`, `MQTT`, `SHELL`) defined in the new
+  framework-free `app/config_schema.py` (tuple-of-pairs `SECTION_SPECS` ->
+  defaults + key->section map + source-declared `SECTION_ORDER`/
+  `SECTION_KEYS`; NO legacy migration -- owner decision, early development:
+  a wrong-shape file is re-seeded/re-provisioned). Shell grammar: bare
+  `config` = section names, `all` = grouped dump, `<SECTION>` = one section,
+  `get/set/reset SECTION.KEY` (flat refs rejected with a qualified-form
+  hint); listings are JSON TEXT assembled in schema order (device dicts are
+  hash-ordered -- gotcha catalog). Live: `config boiler` key order exact,
+  autotest `test run config` 8/8. Host suite 230 green. Local
+  `app-config.json` + `app-config.example.json` rewritten to the layout.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

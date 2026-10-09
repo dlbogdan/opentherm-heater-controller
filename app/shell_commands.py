@@ -200,8 +200,8 @@ def register_transport_commands(shell, transport):
 
 # --------------------------------------------------------------------------- config
 
-CONFIG_USAGE = ("usage: config [get [KEY]|set KEY VALUE|reset KEY|"
-                "list [SECTION]|defaults]")
+CONFIG_USAGE = ("usage: config [<SECTION>|all|defaults|get SECTION.KEY"
+                "|set SECTION.KEY VALUE|reset SECTION.KEY]")
 
 
 def _coerce(default, raw):
@@ -250,89 +250,126 @@ def _shown(key, value):
     return "***" if value else ""
 
 
-def _grouped(config, values):
-    """Mask + group a flat key->value snapshot by config section.
+def _grouped_json(config, values):
+    """Grouped JSON assembled in the schema's section + key order.
 
-    The section order comes from ``config.sections`` (the schema), so the
-    shell listing reads in the same domain order as the file and the docs.
+    MicroPython dicts iterate in HASH order, so building a dict and
+    dumping it scrambles the domains on-device (host CPython preserves
+    insertion order -- the classic host-passes/device-looks-wrong trap).
+    The listing is therefore assembled as JSON text, deterministically.
     """
-    out = {}
-    for section, keys in config.sections.items():
-        out[section] = dict((k, _shown(k, values[k])) for k in keys)
-    return out
+    sections = []
+    for section in config.section_order:
+        kvs = []
+        for key in config.section_keys[section]:
+            kvs.append("%s: %s" % (json.dumps(key),
+                                   json.dumps(_shown(key, values[key]))))
+        sections.append("%s: {%s}" % (json.dumps(section), ", ".join(kvs)))
+    return "{%s}" % ", ".join(sections)
+
+
+def _section_json(config, section, values):
+    """One section as JSON text, keys in schema order (see _grouped_json)."""
+    kvs = ["%s: %s" % (json.dumps(k), json.dumps(_shown(k, values[k])))
+           for k in config.section_keys[section]]
+    return "{%s}" % ", ".join(kvs)
 
 
 def make_config_handler(config):
     """Return a shell callback that reads/edits the app config over the air.
 
-    ``set`` coerces to the key's type, persists via ``config.set`` (which also
-    notifies live subscribers), then runs ``config.validate`` to self-heal:
-    an out-of-range value is reported REJECTED and reset, a valid one OK.
+    Grammar (sections per ``config_schema``):
 
-    Listings (bare / ``list`` / ``defaults``) are GROUPED by config section
-    (HEATING_PARAMS, SENSORS_CONFIG, ...; ``list SECTION`` filters); keys stay
-    globally unique so ``get``/``set``/``reset`` keep the flat key syntax.
+    * ``config``                   -> the list of section names
+    * ``config all``               -> every value, grouped by section
+    * ``config <SECTION>``         -> just that section's values
+    * ``config defaults``          -> shipped defaults, grouped
+    * ``config get SECTION.KEY``   -> one value
+    * ``config set SECTION.KEY V`` -> set + validate (coerced to type)
+    * ``config reset SECTION.KEY`` -> back to the shipped default
+
+    A flat ``t_on`` in get/set/reset is rejected with a hint naming its
+    qualified form (muscle memory teaches the new syntax; no silent
+    ambiguity). ``set`` coerces to the key's type, persists via
+    ``config.set`` (which also notifies live subscribers), then runs
+    ``config.validate`` to self-heal: an out-of-range value is reported
+    REJECTED and reset, a valid one OK.
 
     Secret values are masked in every reply (see ``_shown``): the telnet
     shell is unauthenticated on the LAN, so ``config`` must never put a
     credential on the wire.
     """
     defaults = config.defaults
+    key_section = {}
+    for section, keys in config.sections.items():
+        for key in keys:
+            key_section[key] = section
+
+    def resolve(ref):
+        """'SECTION.KEY' -> (section, key, None) or (None, None, error)."""
+        section, dot, key = ref.partition(".")
+        if not dot:
+            if ref in key_section:
+                return None, None, ("use the qualified form: %s.%s"
+                                    % (key_section[ref], ref))
+            return None, None, "unknown config key: %s" % ref
+        if section not in config.sections:
+            return None, None, "unknown section: %s (sections: %s)" % (
+                section, ", ".join(config.section_order))
+        if key not in config.sections[section]:
+            return None, None, "unknown config key: %s" % ref
+        return section, key, None
 
     def handle(args=""):
         parts = args.split()
-        command = parts[0] if parts else "list"
+        if not parts:
+            return json.dumps(list(config.section_order))
 
-        if command in ("list", "get") and len(parts) <= 1:
-            # Bare ``config`` / ``config list`` / ``config get`` -> every
-            # value GROUPED by section (secrets masked -- the shell is
-            # unauthenticated on the LAN).
-            return json.dumps(_grouped(config, config.all()))
+        command = parts[0]
 
-        if command == "list" and len(parts) == 2:
-            section = parts[1].upper()
-            if section not in config.sections:
-                return "unknown section: %s (sections: %s)" % (
-                    parts[1], ", ".join(config.sections))
-            values = config.all()
-            return json.dumps(dict(
-                (k, _shown(k, values[k])) for k in config.sections[section]))
+        if command == "all" and len(parts) == 1:
+            return _grouped_json(config, config.all())
+
+        if command == "defaults" and len(parts) == 1:
+            return _grouped_json(config, defaults)
 
         if command == "get" and len(parts) == 2:
-            key = parts[1]
-            if key not in defaults:
-                return "unknown config key: %s" % key
-            return json.dumps({key: _shown(key, config.get(key))})
+            section, key, err = resolve(parts[1])
+            if err:
+                return err
+            return json.dumps({parts[1]: _shown(key, config.get(key))})
 
         if command == "set" and len(parts) == 3:
-            key, raw = parts[1], parts[2]
-            if key not in defaults:
-                return "unknown config key: %s" % key
-            ok, value = _coerce(defaults[key], raw)
+            section, key, err = resolve(parts[1])
+            if err:
+                return err
+            ok, value = _coerce(defaults[key], parts[2])
             if not ok:
-                return "set failed for %s: %s" % (key, value)
+                return "set failed for %s: %s" % (parts[1], value)
             config.set(key, value)
             problems = config.validate()
             current = config.get(key)
             if current == value:
-                note = "" if not problems else " (also repaired: %s)" % "; ".join(problems)
-                return "OK: %s = %s%s" % (key, _shown(key, current), note)
+                note = ("" if not problems
+                        else " (also repaired: %s)" % "; ".join(problems))
+                return "OK: %s = %s%s" % (parts[1], _shown(key, current), note)
             return ("REJECTED: %s = %s is invalid; reset to %s. %s"
-                    % (key, _shown(key, value), _shown(key, current),
+                    % (parts[1], _shown(key, value), _shown(key, current),
                        "; ".join(problems)))
 
         if command == "reset" and len(parts) == 2:
-            key = parts[1]
-            if key not in defaults:
-                return "unknown config key: %s" % key
+            section, key, err = resolve(parts[1])
+            if err:
+                return err
             config.set(key, defaults[key])
             problems = config.validate()
             return "OK: %s reset to %s%s" % (
-                key, _shown(key, config.get(key)),
+                parts[1], _shown(key, config.get(key)),
                 "" if not problems else " (repaired: %s)" % "; ".join(problems))
 
-        if command == "defaults" and len(parts) == 1:
-            return json.dumps(_grouped(config, defaults))
+        section = command.upper()
+        if len(parts) == 1 and section in config.sections:
+            return _section_json(config, section, config.all())
 
         return CONFIG_USAGE
 
@@ -344,8 +381,7 @@ def register_config_commands(shell, config):
     shell.add(
         "config",
         make_config_handler(config),
-        "get [KEY]|set KEY VALUE|reset KEY|list [SECTION]|defaults "
-        "(grouped by section)",
+        "sections | all | <SECTION> | get/set/reset SECTION.KEY | defaults",
     )
 
 
