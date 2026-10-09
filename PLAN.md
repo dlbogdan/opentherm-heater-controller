@@ -134,6 +134,21 @@ note: the board's shell was occupied by another client pre-deploy (raw
 socket probe answered "busy: one client at a time" — GOTCHAS §5 pattern,
 not a board fault).
 
+**Live proof suite (same day, firmware 1.1.83 via `deploy.py --debug`).
+`autotests/test_control_net_live.py` (2 cases, both PASS on the board):
+patches the LIVE weather source's `read` (the exact singleton the loop
+uses, via `app_entry.LIVE`) to raise, waits for the next control tick to
+hit it, asserts the wrapper's WARN lands in `/log.txt` WITH the injected
+exception text (proves the caught raise is ours), and restores in
+tearDown + finally (second case asserts the live singleton holds no
+debris). The run took 54 s to hit the tick — the suite's `timeout_s = 75`
+override (runner honors a per-instance `timeout_s`, autotest.py:299) was
+REQUIRED: the default 60 s guard would have timed out on that phase.
+Visible evidence: `WARNING: Control: tick failed: control-net live demo`
+in `log`. Costs per run: one intentional WARN flash line + 1-2 aborted
+ticks (no actuation — the net aborts before the decision; re-assert task
+keeps the dummy CS alive).
+
 ## P4 — Enforce demand freshness in the control loop
 
 **Problem.** `HeatingGroups.read()` stamps `"ts"` on the aggregate explicitly
