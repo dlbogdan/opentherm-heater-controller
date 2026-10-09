@@ -90,6 +90,28 @@ re-verify before trusting them elsewhere.
 - **Provenance:** 2026-10-04 (bit twice: `telnet_service.py` dispatch + the
   autotest runner). Host tests pin the predicate.
 
+### A bound method exposes NO `__code__`, NO `__func__`, NO `__self__`
+- **Symptom:** the shell's streaming dispatch (pass an `emit` callback to
+  handlers that take `(args, emit)`) silently never activated on-device: a
+  `test run` produced zero bytes for minutes and kept occupying the
+  single-client shell even after the client left (buffered reply, no
+  writes → no disconnect detection). Host suite fully green.
+- **Reality:** on this build a bound method carries NONE of the CPython
+  introspection dunders. `getattr(m, "__code__", None)`,
+  `getattr(m, "__func__", None)` and `getattr(m, "__self__", None)` are
+  ALL `None` (verified by an `mpremote exec` probe on the live board).
+  Arity probing is therefore impossible on-device — and it fails
+  *silently* (the probe just returns False → buffered path).
+- **Fix:** declare the capability at registration, never infer it:
+  `TelnetService.add(name, handler, desc, streaming=True)` stores the
+  flag; `_dispatch` passes `emit` when set. The CPython arity probe
+  remains only as a host-side fallback. `autotest.register` requests
+  `streaming=True` and falls back to the 3-arg `add()` on `TypeError`
+  (new runner still works against an old `/lib/coresys`).
+- **Provenance:** 2026-10-09 (framework `a01e118`; two failed probes —
+  `__code__`, then `__func__` — before the on-device exec probe settled
+  it). Host pins: opaque-handler streaming + register declares/falls back.
+
 ### The autotest `unittest` shim: `assertAlmostEqual` has NO `delta=` kwarg
 - **Symptom:** an autotest passes the whole host suite, then ERRORs
   on-device with `TypeError: unexpected keyword argument 'delta'` — after
@@ -209,6 +231,13 @@ re-verify before trusting them elsewhere.
 - **Provenance:** 2026-10-07: a user's interactive telnet session looked
   exactly like a dead board (no ARP entry + suspicious ping answer on the
   stale lease; whole-subnet scan found no shell).
+- **NB (2026-10-09):** a *buffered* long command (e.g. `test run` before
+  streaming worked) keeps occupying the shell even after the client
+  disconnects — no writes means no disconnect detection, so every later
+  probe (even `status`) times out until the run finishes on its own.
+  Symptom: one command's client times out, then the whole shell is dead
+  for minutes. Streaming (emit) fixes this: writes to the closed socket
+  abort the run promptly.
 
 ### Shell down ≠ board dead — the REPL is usually alive
 - A board in a crash/reset loop (answers one ping, never serves the shell)
@@ -282,6 +311,18 @@ re-verify before trusting them elsewhere.
   matters during provisioning (see AGENTS.md provisioning pitfalls).
 - **macOS `cp` fails on the RP2 bootrom volume** (xattr copy); use a plain
   byte copy (`cat uf2 > volume/uf2`).
+- **`telnet.py` long commands stream + use activity-based timeouts**
+  (2026-10-09): output is echoed as it arrives (the `<<<END>>>` marker
+  never leaks; a split trailing line is held until confirmed), and
+  silence past 15 s prints `... still waiting (Ns...)` to stderr.
+  `OTC_CMD_TIMEOUT` (default 10 s) guards ONLY the banner/first chunk
+  (the half-boot guard); `OTC_CMD_IDLE_TIMEOUT` (300 s) caps silence
+  AFTER output started; `OTC_CMD_IDLE_TIMEOUT`/`OTC_READ_TIMEOUT` are
+  the interactive caps. A timeout error now names the command + knob.
+  `autotest.py run` tees the stream live. Device-side streaming needs
+  the runner + `telnet_service.py` in `/lib/coresys` to be current
+  (USB `autotest.py push` or provisioning) — a release OTA slot carries
+  neither, so an un-refreshed board stays buffered.
 
 ---
 

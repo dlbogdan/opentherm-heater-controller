@@ -662,6 +662,23 @@ Consequences for this codebase (do not "fix" them away):
   fire-and-forget `reboot` was swallowed by a flaky shell (climbing
   `uptime_s` proved it); one manual reboot promoted cleanly.
 
+- Shell tooling UX: streaming test progress + configurable timeouts
+  (framework `84f09ba`→`a01e118`, board `/lib/coresys` refreshed by USB
+  `autotest.py push`, firmware 1.1.89 slot b): `test run` now streams
+  each outcome as it happens (the shell service passes an async `emit`
+  to handlers DECLARED `streaming=True` at `add()` — arity probing is
+  impossible on-device: a bound method exposes no `__code__`/`__func__`/
+  `__self__`, see MICROPYTHON-GOTCHAS §1), the host client echoes output
+  live with `... still waiting (Ns...)` heartbeats and activity-based
+  timeouts (`OTC_CMD_TIMEOUT` banner-only, `OTC_CMD_IDLE_TIMEOUT` /
+  `OTC_READ_TIMEOUT`), and the runner's per-test timeout / heap floor
+  resolve from `system-config.json` `AUTOTEST` (example config updated;
+  seeded on the board). Verified live: `test run config` streams per
+  test; `test run freshness` (the suite that used to look hung for
+  minutes) streamed 5/5 PASS over 145.8 s with heartbeats through the
+  60 s silent tests and no timeout at default settings; shell released
+  cleanly and config stayed intact. Framework host suite 127 green.
+
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),
 `pico-standalone-architecture.md` for the target architecture and

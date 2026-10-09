@@ -232,6 +232,23 @@ also verified over the shell: `manual_setpoint 50` accepted/persisted,
 `100` REJECTED+repaired, `sensor_cache_s 100` REJECTED (both cross-
 constraints reported), values restored.
 
+**Shell tooling UX (side task, framework `84f09ba`→`a01e118`, board
+`/lib/coresys` refreshed via USB `autotest.py push`, firmware 1.1.89).**
+Long shell commands (`test run`) looked hung: the device runner buffered
+every outcome into one reply, the host client buffered that reply, and a
+10 s one-shot guard then blamed "mid-boot" on a healthy board. Now the
+runner streams each outcome as it happens (the service passes an async
+`emit` to handlers DECLARED `streaming=True` at `add()` — arity probing
+is impossible on-device: a bound method exposes no `__code__`/`__func__`/
+`__self__`, MICROPYTHON-GOTCHAS §1), the client echoes output live with
+`... still waiting (Ns...)` heartbeats and activity-based timeouts
+(`OTC_CMD_TIMEOUT` banner-only; `OTC_CMD_IDLE_TIMEOUT`/`OTC_READ_TIMEOUT`),
+and the runner's per-test timeout / heap floor resolve from
+`system-config.json` `AUTOTEST` (example config updated; seeded on the
+board). Live: `test run freshness` streamed 5/5 PASS over 145.8 s with
+heartbeats through the 60 s silent tests, no timeout at defaults; shell
+released cleanly, config intact. Framework host suite 127 green.
+
 ## P5 — Housekeeping (host-only, one commit, no deploy)
 
 - `app/rooms.py:4` docstring: the demand scale is 0..100 percent, not 0..1.
