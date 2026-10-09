@@ -33,6 +33,7 @@ def _params():
         "demand_neutral": 3, "demand_rate": 0.1, "demand_exponent": 1.0,
         "demand_max_p_offset": 10,
         "min_change": 2, "off_sentinel": 0.0,
+        "manual_setpoint": 45.0,
     }
 
 
@@ -140,6 +141,12 @@ def run():
     d5 = ctl.tick(240000, p, None, lux=0.0)     # no outdoor temp -> failsafe
     c.ok("pipe: no t_out -> failsafe heat at 45C",
          d5.action == "heat" and d5.target == FAILSAFE_FLOW)
+    p_manual = dict(p)
+    p_manual["manual_setpoint"] = 50.0
+    d_m = Controller(initial_heating_on=False).tick(
+        300000, p_manual, None, lux=0.0)
+    c.ok("pipe: failsafe follows manual_setpoint",
+         d_m.action == "heat" and d_m.target == 50.0)
 
     # -- Control loop wiring (sensors -> controller -> audited transport) ----
     from control_loop import run_control_tick

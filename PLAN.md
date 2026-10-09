@@ -160,24 +160,59 @@ the restore case now performs the loop's exact call shape
 (`--debug`): suite 2/2 PASS, exactly ONE demo WARN in the log, no
 recurrence past the next tick. Cataloged in `MICROPYTHON-GOTCHAS.md` §1.
 
-## P4 — Enforce demand freshness in the control loop
+## P4 — Sensor cache freshness, cached-data flag, manual-setpoint failsafe
 
 **Problem.** `HeatingGroups.read()` stamps `"ts"` on the aggregate explicitly
 "lets consumers check freshness" (`app/heating_groups.py:157-160`), but no
-consumer checks it: `control_tick` takes `agg["demand_pct"]` unconditionally
-(`app/main.py:271-273`). If the rooms poll never runs (e.g. the bounded
-`_net_ready` window expiring while Wi-Fi flaps), stale demand steers the
-P-term and the on-gate indefinitely. Weather has a 600 s staleness guard;
-demand has none.
+consumer checked it: `control_tick` took `agg["demand_pct"]` unconditionally.
+If the rooms poll stopped, stale demand steered the P-term and the on-gate
+indefinitely. Weather had a fixed 600 s staleness guard but *dropped* the
+last-known value outright — no cached tier, no "working with cached data"
+flag anywhere, and the failsafe flow was the hardcoded 45 °C constant
+rather than the human's target.
 
-**Fix.** Treat the aggregate as the defined "no sensor" input when
-`agg["ts"]` is older than `2 × rooms_poll_s`. Put the check in a small
-host-testable helper (e.g. `rooms.is_fresh(agg, max_age_ms)` using the
-wrap-safe `control.util.elapsed_ms`) and use it in `control_tick`.
+**Implemented (owner decisions, 2026-10-09).**
+- ONE shared expiry for ALL sensor caches: `sensor_cache_s` (default
+  14400 s = 4 h; validated `>= 60` and `>= 2 x ccu3_poll_s` /
+  `>= 2 x rooms_poll_s` so the cached tier always exists).
+- Freshness tiers per source, derived from the sources' OWN timestamps
+  (single source of truth, no drifting booleans): fresh (`<= 2 x poll`) /
+  cached (`<= sensor_cache_s` — the last-known value STILL steers; rooms
+  and weather move slowly) / expired (the controller's defined failsafe
+  input) / none. Pure helpers `rooms.pick_demand` and
+  `sensors.weather_tier`, wrap-safe via `control.util.elapsed_ms`,
+  host-pinned.
+- The weather cache is KEPT past expiry (was dropped); the "too stale"
+  WARN is edge-triggered (one flash line per transition, never per tick —
+  logging policy). Same for demand (`Rooms: demand expired` edge WARN).
+- `state.data_state` (RAM-only, recomputed every tick) IS the "working
+  with cached data" flag for the future UI; the new `sources` shell
+  command serves it as JSON (tiers + ages + the window).
+- Failsafe flow = new config key `manual_setpoint` (default 45.0 == the
+  historical `FAILSAFE_FLOW`, so behavior is unchanged until a human
+  sets it; domain 5..80; deliberately NOT clamped by flow_min/flow_max —
+  explicit human intent; shared with the upcoming manual mode, whose
+  `manual_mode` switch rides with the UI milestone).
+- Discovery retry backoff split out as fixed `DISCOVERY_BACKOFF_S = 600`
+  (it used to ride the old `STALE_LIMIT_S`).
 
-**Verify.** Host: fresh/stale boundary pins (including a ticks_ms wrap case).
-Device: `rooms` JSON already carries `ts`; spot-check against `status`
-`uptime_s`.
+**Verified on-device (firmware 1.1.85, `--debug`, slot b).** Host suite
+174 green (16 new pins: tier boundaries incl. the inclusive cache edge,
+ticks_ms wrap, missing-ts, edge-warn-exactly-once, config domain +
+cross-constraint validation, failsafe-follows-manual). Deploy episode:
+the deploy's fire-and-forget `reboot` was swallowed by a momentarily
+flaky shell (uptime proved the board never rebooted; the promotion poll
+timed out and consumed the 1.1.85 bump) — one manual
+`telnet.py <ip> reboot` promoted 1.1.85 cleanly (extract -> candidate ->
+confirm, slot b). selftest 38/38 (new "pipe: failsafe follows
+manual_setpoint"); config seeded `sensor_cache_s 14400` /
+`manual_setpoint 45.0` with the HA calibration untouched; `sources` ->
+weather fresh (0-1 s) + demand fresh (57 s); live suites: rooms 6/6
+(new `test_pick_demand_live_selection`), pipeline 4/4 (new
+`test_weather_tier_live`); log clean. Watch item: the pre-deploy 1.1.84
+board had begun storming `Rooms: poll failed: ENOMEM` after ~40 min
+uptime (heap-fragmentation suspect); the reboot cleared it — recurrence
+would need a look.
 
 ## P5 — Housekeeping (host-only, one commit, no deploy)
 

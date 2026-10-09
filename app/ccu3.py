@@ -216,7 +216,10 @@ class Ccu3SensorSource:
     """``read() -> (t_out, lux, demand_raw)`` from the CCU3 weather station."""
 
     name = "ccu3"
-    STALE_LIMIT_S = 600  # last value older than this -> failsafe (t_out=None)
+    # Retry backoff for a failed discovery (fixed pacing, NOT the data
+    # freshness window -- P4 split these: staleness is the configurable
+    # ``sensor_cache_s``, shared by ALL sensor caches).
+    DISCOVERY_BACKOFF_S = 600
 
     def __init__(self, config, cache_path="/ccu3_cache.json",
                  http_post=None, sleep=None, log=None, warn=None):
@@ -232,6 +235,7 @@ class Ccu3SensorSource:
         self._values = None  # (t_out, lux, ts_ms)
         self._endpoint = None  # (interface, address)
         self._discovery_failed_ms = None  # retry-backoff marker (see _discover)
+        self._expired_warned = False  # edge-trigger for the stale WARN
         cache = self._load_cache()
         if cache:
             self._endpoint = (cache["interface"], cache["address"])
@@ -240,6 +244,11 @@ class Ccu3SensorSource:
                     % (cache["interface"], cache["address"]))
 
     # -- SensorSource --------------------------------------------------------
+    def _cache_limit_ms(self):
+        """Shared sensor cache expiry (``sensor_cache_s``, one window for
+        ALL sources -- owner decision 2026-10-09)."""
+        return int(self._config.get("sensor_cache_s")) * 1000
+
     async def read(self):
         now = _now_ms()
         poll_ms = int(self._config.get("ccu3_poll_s")) * 1000
@@ -248,11 +257,19 @@ class Ccu3SensorSource:
         if self._values is None:
             return (None, None, None)
         t_out, lux, ts = self._values
-        if _diff_ms(now, ts) > self.STALE_LIMIT_S * 1000:
-            self._values = None  # too old to trust: let the controller failsafe
-            if self._warn:
-                self._warn("CCU3: last value too stale; reporting no reading")
+        if _diff_ms(now, ts) > self._cache_limit_ms():
+            # Expired: the CONTROLLER sees the defined failsafe input,
+            # but the cache itself is KEPT -- last-known data for the
+            # `sources` command and the UI (P4). The WARN is
+            # edge-triggered (one flash line per transition into
+            # expired, never one per tick -- logging policy).
+            if not self._expired_warned:
+                self._expired_warned = True
+                if self._warn:
+                    self._warn("CCU3: last value too stale; reporting no "
+                               "reading (cache kept)")
             return (None, None, None)
+        self._expired_warned = False
         return (t_out, lux, None)
 
     # -- polling -------------------------------------------------------------
@@ -265,7 +282,7 @@ class Ccu3SensorSource:
         if self._discovery_failed_ms is None:
             return False
         return (_diff_ms(now, self._discovery_failed_ms)
-                < self.STALE_LIMIT_S * 1000)
+                < self.DISCOVERY_BACKOFF_S * 1000)
 
     async def _poll(self, now):
         try:
@@ -276,7 +293,7 @@ class Ccu3SensorSource:
                     # the control loop to one tick per ~7.5 min. Stay in
                     # the no-reading state -- read() returns (None, None,
                     # None) and the controller failsafes on t_out=None --
-                    # and retry the scan at most every STALE_LIMIT_S.
+                    # and retry the scan at most every DISCOVERY_BACKOFF_S.
                     return
                 await self._discover()
             iface, addr = self._endpoint

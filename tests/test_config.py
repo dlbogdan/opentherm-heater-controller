@@ -89,6 +89,33 @@ class ConfigValidationTests(unittest.TestCase):
                     "solar_halflife", "net_port", "control_tick_s"):
             self.assertEqual(values[key], self.module.DEFAULTS[key])
 
+    def test_sensor_cache_s_and_manual_setpoint_are_validated(self):
+        # P4: ONE shared sensor cache expiry + the human's flow target
+        # (manual mode and the no-sensor failsafe share manual_setpoint).
+        self.set_value("sensor_cache_s", 30)
+        self.set_value("manual_setpoint", 100)
+        problems = self.config.validate()
+        self.assertIn("sensor_cache_s must be >= 60", problems)
+        self.assertIn("manual_setpoint must be 5..80 (absolute sanity; it is "
+                      "the manual AND failsafe flow, bypassing the curve "
+                      "limits)", problems)
+        values = self.config.all()
+        self.assertEqual(values["sensor_cache_s"],
+                         self.module.DEFAULTS["sensor_cache_s"])
+        self.assertEqual(values["manual_setpoint"],
+                         self.module.DEFAULTS["manual_setpoint"])
+
+    def test_sensor_cache_s_must_cover_both_poll_cadences(self):
+        # The "cached" tier only exists if the expiry exceeds each
+        # source's fresh window (2 x its poll cadence); a smaller value
+        # is a config mistake, so it resets to the shipped default.
+        self.set_value("sensor_cache_s", 100)  # < 2 x 60 and < 2 x 300
+        problems = self.config.validate()
+        self.assertIn("sensor_cache_s must be >= 2 x ccu3_poll_s", problems)
+        self.assertIn("sensor_cache_s must be >= 2 x rooms_poll_s", problems)
+        self.assertEqual(self.config.get("sensor_cache_s"),
+                         self.module.DEFAULTS["sensor_cache_s"])
+
     def test_off_sentinel_at_or_above_8_is_repaired(self):
         # AGENTS.md OTGW rule: a CS >= 8 degC is an ACTIVE setpoint (heats
         # the boiler, needs per-minute re-assert). A board that persisted

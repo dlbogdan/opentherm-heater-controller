@@ -66,6 +66,7 @@ PRODUCTION = {
     "demand_neutral": 0, "demand_rate": 3.8, "demand_exponent": 0.35,
     "demand_max_p_offset": 10,
     "min_change": 1, "off_sentinel": 0.0,
+    "manual_setpoint": 45.0,
 }
 
 
@@ -284,6 +285,7 @@ class E2EConfig:
             "room_source": "heating_groups",
             "demand_delta_cap": 3.0, "rooms_poll_s": 300,
             "demand_enabled": True,
+            "sensor_cache_s": 14400,
         })
         self.values.update(overrides)
 

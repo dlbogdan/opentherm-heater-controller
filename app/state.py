@@ -51,6 +51,14 @@ class State:
         # on the active slot (degraded mode). Actuation is held; the app keeps
         # its services up for diagnosis and never reboots on its own.
         self.post_failed = False
+        # Runtime-only (never persisted, recomputed every control tick, P4):
+        # what the loop ACTUALLY holds per sensor source --
+        # {"weather": tier, "weather_age_s": s, "demand": tier,
+        #  "demand_age_s": s, "cache_s": s}. The `sources` shell command
+        # serves it; the future UI warning = any tier in cached|expired.
+        # RAM-only by design: a per-tick flash write would violate the
+        # logging policy.
+        self.data_state = None
         self._load()
 
     def _load(self):

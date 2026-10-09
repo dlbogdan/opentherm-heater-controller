@@ -55,6 +55,24 @@ DEFAULTS = {
     "demand_max_p_offset": 10,
     # Rate limiting
     "min_change": 2,
+    # Sensor cache expiry (seconds) -- ONE expiry window for ALL sensor
+    # caches (weather + rooms; owner decision 2026-10-09). Within it, a
+    # source whose polls fail keeps steering the control loop on its
+    # last-known value (the "cached" tier -- `sources` shell command and
+    # the future UI warning flag it). Past it the controller degrades to
+    # its defined failsafe inputs (flow = manual_setpoint, demand =
+    # "no sensor"). Must exceed both poll cadences so the cached tier
+    # exists.
+    "sensor_cache_s": 14400,
+    # The human's flow target. Used by the upcoming manual control mode
+    # (settings/UI switch lands with the UI) AND -- the reason it lands
+    # now -- as the failsafe flow when no fresh sensor data exists
+    # (expired cache, or boot without a usable sensor source). Default
+    # 45.0 == the historical FAILSAFE_FLOW constant, so behavior is
+    # unchanged until a human sets it. Deliberately NOT clamped by
+    # flow_min/flow_max: a manual value is explicit human intent. NOTE:
+    # with no t_out the frost clamp cannot run -- this value IS the floor.
+    "manual_setpoint": 45.0,
     # Control loop (periodic tick interval in seconds; applied at boot)
     "control_tick_s": 60,
     # Transport
@@ -243,6 +261,11 @@ class Config:
              "otgw_ack_timeout_s must be 1..10"),
             ("rooms_poll_s", v["rooms_poll_s"] >= 30,
              "rooms_poll_s must be >= 30"),
+            ("sensor_cache_s", v["sensor_cache_s"] >= 60,
+             "sensor_cache_s must be >= 60"),
+            ("manual_setpoint", 5 <= v["manual_setpoint"] <= 80,
+             "manual_setpoint must be 5..80 (absolute sanity; it is the "
+             "manual AND failsafe flow, bypassing the curve limits)"),
             ("net_port", 1 <= v["net_port"] <= 65535,
              "net_port must be in 1..65535"),
         )
@@ -266,6 +289,12 @@ class Config:
              lambda: v["curve_base"] <= v["flow_design"]),
             ("ccu3_poll_s must be >= 30", ("ccu3_poll_s",),
              lambda: v["ccu3_poll_s"] >= 30),
+            ("sensor_cache_s must be >= 2 x ccu3_poll_s",
+             ("sensor_cache_s",),
+             lambda: v["sensor_cache_s"] >= 2 * v["ccu3_poll_s"]),
+            ("sensor_cache_s must be >= 2 x rooms_poll_s",
+             ("sensor_cache_s",),
+             lambda: v["sensor_cache_s"] >= 2 * v["rooms_poll_s"]),
         )
         for _round in range(len(constraints) + 1):
             failed = [(message, keys) for message, keys, check in constraints

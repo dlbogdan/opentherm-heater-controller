@@ -96,6 +96,7 @@ class FakeConfig:
             "ccu3_pass": "secret",
             "ccu3_weather_type": "HmIP-SWO",
             "ccu3_poll_s": 60,
+            "sensor_cache_s": 14400,
             "t_out_source": "auto",
             "lux_mult": 1.0,
         }
@@ -189,14 +190,47 @@ class Ccu3SourceTests(unittest.TestCase):
         failing._values = (8.5, 12000.0, ccu3._now_ms() - 10_000)  # 10 s old
         self.assertEqual(run(failing.read()), (8.5, 12000.0, None))
 
-    def test_value_older_than_stale_limit_is_dropped(self):
+    def test_value_beyond_cache_window_reports_no_reading_but_keeps_cache(self):
+        # P4: past sensor_cache_s the CONTROLLER sees the failsafe input,
+        # but the last-known value is KEPT (for `sources`/UI display).
+        import ccu3
+        failing = Ccu3SensorSource(
+            FakeConfig(sensor_cache_s=600), cache_path=self.cache,
+            http_post=fail_post, sleep=lambda _s: None)
+        failing._endpoint = ("HmIPRf", "BBB")
+        failing._values = (8.5, 12000.0,
+                           ccu3._now_ms() - 700_000)  # > 600 s cache
+        self.assertEqual(run(failing.read()), (None, None, None))
+        self.assertIsNotNone(failing._values)  # cache retained, not dropped
+
+    def test_value_within_cache_window_still_steers(self):
+        # P4 cached tier: polls failing, value inside sensor_cache_s ->
+        # the last-known value KEEPS steering (owner decision 2026-10-09).
         import ccu3
         failing = Ccu3SensorSource(
             FakeConfig(), cache_path=self.cache, http_post=fail_post,
             sleep=lambda _s: None)
+        failing._endpoint = ("HmIPRf", "BBB")
         failing._values = (8.5, 12000.0,
-                           ccu3._now_ms() - 700_000)  # > 600 s limit
-        self.assertEqual(run(failing.read()), (None, None, None))
+                           ccu3._now_ms() - 700_000)  # 700 s < 14400 s
+        self.assertEqual(run(failing.read()), (8.5, 12000.0, None))
+
+    def test_expired_warn_is_edge_triggered(self):
+        # One flash WARN per transition into expired -- never one per tick
+        # (logging policy: a per-tick WARN would be a flash-write storm).
+        import ccu3
+        warned = []
+        failing = Ccu3SensorSource(
+            FakeConfig(sensor_cache_s=600), cache_path=self.cache,
+            http_post=fail_post, sleep=lambda _s: None,
+            warn=lambda m: warned.append(m))
+        failing._endpoint = ("HmIPRf", "BBB")
+        failing._values = (8.5, 12000.0,
+                           ccu3._now_ms() - 700_000)  # already expired
+        for _ in range(5):  # five expired reads (each also logs a poll fail)
+            self.assertEqual(run(failing.read()), (None, None, None))
+        stale = [m for m in warned if "too stale" in m]
+        self.assertEqual(len(stale), 1)
 
     # -- ticks_ms wrap (2**32 ms ~ 49.7 days uptime) --------------------------
     # The stamps below straddle the wrap: the value was recorded just BEFORE
@@ -232,11 +266,11 @@ class Ccu3SourceTests(unittest.TestCase):
 
     def test_stale_limit_triggers_across_the_wrap(self):
         failing = Ccu3SensorSource(
-            FakeConfig(), cache_path=self.cache, http_post=fail_post,
-            sleep=lambda _s: None)
+            FakeConfig(sensor_cache_s=600), cache_path=self.cache,
+            http_post=fail_post, sleep=lambda _s: None)
         failing._endpoint = ("HmIPRf", "BBB")
         failing._values = (8.5, 12000.0, self.WRAP - 700_000)  # 700 s pre-wrap
-        self.patch_now(5_000)  # true age 705 s > 600 s limit -> must drop
+        self.patch_now(5_000)  # true age 705 s > 600 s cache -> no reading
         self.assertEqual(run(failing.read()), (None, None, None))
 
 
@@ -306,7 +340,7 @@ class DiscoveryBackoffTests(unittest.TestCase):
         run(source.read())
         self.assertEqual(fake.methods.count("Device.listAll"), 3)
         # After the window elapses: exactly one more scan cycle.
-        self.clock.advance_s(Ccu3SensorSource.STALE_LIMIT_S + 1)
+        self.clock.advance_s(Ccu3SensorSource.DISCOVERY_BACKOFF_S + 1)
         run(source.read())
         self.assertEqual(fake.methods.count("Device.listAll"), 6)
 
@@ -315,7 +349,7 @@ class DiscoveryBackoffTests(unittest.TestCase):
         source = self.make(fake)
         run(source.read())  # fails -> backoff marker set
         self.assertIsNotNone(source._discovery_failed_ms)
-        self.clock.advance_s(Ccu3SensorSource.STALE_LIMIT_S + 1)
+        self.clock.advance_s(Ccu3SensorSource.DISCOVERY_BACKOFF_S + 1)
         source._rpc._post = FakeCcu3()  # the weather station is back
         t_out, _lux, _ts = run(source.read())
         self.assertIsNotNone(t_out)

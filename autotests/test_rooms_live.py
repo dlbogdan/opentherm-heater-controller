@@ -121,6 +121,22 @@ class TestRoomsAggregate(unittest.TestCase):
         poll_s = int(config.get("rooms_poll_s") or 300)
         self.assertLessEqual(_age_ms(agg["ts"]), (poll_s + 180) * 1000)
 
+    def test_pick_demand_live_selection(self):
+        # P4: the EXACT selection main.py makes, against the LIVE
+        # aggregate: a healthy periodic task must resolve fresh (cached
+        # tolerated for a slow pass), keep the value steering, and the
+        # shared sensor_cache_s key must exist in the live config.
+        from rooms import pick_demand
+        from sensors import TIER_CACHED, TIER_FRESH
+        agg = self.rooms.last()
+        poll_s = int(config.get("rooms_poll_s") or 300)
+        cache_s = int(config.get("sensor_cache_s"))
+        self.assertGreaterEqual(cache_s, 2 * poll_s)
+        value, tier, age_s = pick_demand(agg, _now_ms(), poll_s, cache_s)
+        self.assertIn(tier, (TIER_FRESH, TIER_CACHED))
+        self.assertEqual(value, agg["demand_pct"])
+        self.assertGreaterEqual(age_s, 0)
+
 
 class TestRoomsIndependentPass(unittest.TestCase):
     """Recompute the pass independently, cross-check the production cache.

@@ -260,7 +260,8 @@ async def main():
     # The first tick fires before Wi-Fi is connected: it waits (bounded, 120 s)
     # for the connect instead of skipping, so the first pass lands right after
     # connect -- no failing I/O, no full-interval dead wait.
-    from rooms import make_rooms_source
+    from rooms import make_rooms_source, pick_demand
+    from sensors import TIER_EXPIRED, weather_tier
     rooms = make_rooms_source(config, log=log, warn=warn)
     LIVE.update(transport=transport, rooms=rooms, controller=controller,
                 sensor_source=sensor_source)
@@ -284,6 +285,10 @@ async def main():
             description="room pass (setpoints/actuals -> demand)",
             is_coroutine=True)
         logger.info("App: rooms poll started (every %ds)." % rooms.poll_s)
+
+    # P4 demand-expiry WARN edge tracker (RAM-only): warn once on the
+    # transition INTO expired, cleared on recovery, never per tick.
+    demand_edge = {"was": None}
 
     async def control_tick():
         # Last-resort net (PLAN.md P3): make control-tick failures visible.
@@ -314,23 +319,42 @@ async def main():
                 t_out, lux, _ = await sensor_source.read()
             else:
                 t_out, lux = None, None
-            # Heating demand from the cached room aggregate -- the ReGaHd
-            # ``demand_pct`` in PERCENT (0..100, the same scale as
-            # ``demand_neutral``). None before the first pass, or with no
-            # room backend: the defined "no sensor" input (zero offset,
-            # permissive gate). The P-term/gate itself is enabled by
-            # ``demand_enabled`` (wired onto the controller below).
-            demand = None
-            agg = rooms.last()
-            if agg and agg.get("demand_pct") is not None:
-                demand = agg["demand_pct"]
+            # Heating demand + sensor-freshness tiers (P4). Everything is
+            # derived from the sources' OWN timestamps (single source of
+            # truth -- no drifting booleans): pick_demand applies the
+            # whole fresh/cached/expired policy (host-pinned in rooms.py,
+            # one shared sensor_cache_s expiry), and the weather tier is
+            # derived from the source's cached stamp. The tier feeds
+            # state.data_state (RAM-only; `sources` shell command; the
+            # future UI warning flag). Expired -> the controller's
+            # defined failsafe inputs.
+            cache_s = int(config.get("sensor_cache_s"))
+            now_ms = time.ticks_ms()
+            values = (sensor_source.last()
+                      if hasattr(sensor_source, "last") else None)
+            weather, weather_age = weather_tier(
+                values, now_ms, config.get("ccu3_poll_s"), cache_s)
+            demand, demand_tier, demand_age = pick_demand(
+                rooms.last(), now_ms, rooms.poll_s, cache_s)
+            if (demand_tier == TIER_EXPIRED
+                    and demand_edge["was"] != TIER_EXPIRED):
+                # Edge-triggered (one flash line per transition, never
+                # one per tick -- logging policy).
+                warn("Rooms: demand expired (age %ss > %ss); no-sensor "
+                     "input" % (demand_age, cache_s))
+            demand_edge["was"] = demand_tier
+            state.data_state = {
+                "weather": weather, "weather_age_s": weather_age,
+                "demand": demand_tier, "demand_age_s": demand_age,
+                "cache_s": cache_s,
+            }
 
             def read_sensors():
                 return (t_out, lux, demand)
 
             run_control_tick(
                 controller, transport, state, config.all(), read_sensors,
-                time.ticks_ms(), log=log, warn=warn)
+                now_ms, log=log, warn=warn)
         except Exception as exc:
             # WARN -> flash (logging policy); consumes the exception, so
             # the framework's generic TASK_FAILED line stops firing for
@@ -391,10 +415,12 @@ async def main():
         shell.add("selftest", _run_selftest, "run the control-core self-test")
         from shell_commands import (register_config_commands,
                                     register_rooms_commands,
+                                    register_sources_commands,
                                     register_transport_commands)
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
         register_rooms_commands(shell, rooms)
+        register_sources_commands(shell, state)
         # Device test suites (framework runner): unittest-style suites are
         # pushed to /autotests by the host tool (tools/target/autotest.py)
         # or OTA'd INSIDE the slot by a --debug build (deploy.py --debug).

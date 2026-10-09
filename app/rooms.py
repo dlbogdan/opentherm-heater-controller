@@ -11,7 +11,14 @@ lazily by ``make_rooms_source``), so it is host-testable and ``main.py`` can
 select the concrete source from app config exactly as it does for the weather
 source (``sensors.make_sensor_source``) instead of hardwiring a specific
 backend. The CCU3 collector itself lives in ``app/heating_groups.py``.
+
+P4 adds ``pick_demand``: the WHOLE demand selection (fresh / cached /
+expired against the shared ``sensor_cache_s`` expiry), host-pinned here so
+the device glue in ``main.py`` stays a one-liner.
 """
+
+from control.util import elapsed_ms
+from sensors import TIER_CACHED, TIER_EXPIRED, TIER_FRESH, TIER_NONE
 
 
 class RoomsSource(object):
@@ -62,3 +69,37 @@ def make_rooms_source(config, log=None, warn=None):
     if log:
         log("Rooms: source -> none (no ccu3_url; demand disabled)")
     return NullRoomsSource()
+
+
+def pick_demand(agg, now_ms, poll_s, cache_s):
+    """``(demand_pct, tier, age_s)`` -- the whole demand selection (P4).
+
+    * fresh (age <= 2 x ``poll_s``): the value steers.
+    * cached (age <= ``sensor_cache_s``): the last-known value STILL
+      steers -- room setpoints/actuals move slowly -- and the tier flags
+      it for the UI (owner decision 2026-10-09).
+    * expired / missing / no source: value is ``None`` -- the controller's
+      defined "no sensor" input (zero offset, permissive gate), so stale
+      data can never suppress or fake-engage heat past the cache window.
+
+    Wrap-safe via ``control.util.elapsed_ms``; a negative elapsed (clock
+    anomaly) counts as fresh, mirroring the weather staleness guard. A
+    fresh/cached aggregate whose ``demand_pct`` is None (empty pass)
+    yields value None with the tier kept -- the controller treats it as
+    no-sensor either way.
+    """
+    if not agg:
+        return (None, TIER_NONE, None)
+    ts = agg.get("ts")
+    if ts is None:
+        return (None, TIER_EXPIRED, None)
+    age = elapsed_ms(ts, now_ms)
+    if age < 0:
+        age = 0
+    age_s = age // 1000
+    value = agg.get("demand_pct")
+    if age <= 2 * int(poll_s) * 1000:
+        return (value, TIER_FRESH, age_s)
+    if age <= int(cache_s) * 1000:
+        return (value, TIER_CACHED, age_s)
+    return (None, TIER_EXPIRED, age_s)

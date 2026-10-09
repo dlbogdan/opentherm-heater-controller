@@ -325,3 +325,37 @@ def register_rooms_commands(shell, groups):
         "latest room aggregate (setpoints/actuals + demand); updated by the "
         "periodic rooms poll",
     )
+
+
+# ------------------------------------------------------------------- sources
+
+SOURCES_USAGE = "usage: sources   # sensor freshness tiers + ages (UI flag)"
+
+
+def make_sources_handler(state):
+    """Return a shell callback showing what the loop ACTUALLY holds (P4).
+
+    Per-source freshness tiers derived from the sources' own timestamps
+    each control tick (fresh / cached / expired / none) plus the ages and
+    the shared ``sensor_cache_s`` window. The future UI warning flag is
+    exactly this state (any tier in cached|expired).
+    """
+
+    def handle(args=""):
+        if args.split():
+            return SOURCES_USAGE
+        data = state.data_state
+        if data is None:
+            return "no sensor state yet (first control tick pending)"
+        return json.dumps(data)
+
+    return handle
+
+
+def register_sources_commands(shell, state):
+    """Register the sensor-freshness viewer on a framework TelnetService."""
+    shell.add(
+        "sources",
+        make_sources_handler(state),
+        "sensor freshness: weather/demand tiers + ages (UI warning flag)",
+    )

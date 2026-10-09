@@ -121,6 +121,23 @@ class TestLuxCalibrationLive(unittest.TestCase):
         if t_out is not None:
             self.assertTrue(-40.0 < t_out < 60.0, "t_out sane: %r" % t_out)
 
+    async def test_weather_tier_live(self):
+        # P4: the tier helper main.py uses, over the LIVE source stamp:
+        # a healthy periodic poll must resolve fresh (cached tolerated for
+        # one slow pass), and the shared sensor_cache_s key must exist.
+        from sensors import TIER_CACHED, TIER_FRESH, weather_tier
+        src = _live().get("sensor_source")
+        if src is None:
+            self.skipTest("no LIVE sensor_source (firmware too old?)")
+        if not await _wait_weather(src):
+            self.skipTest("no weather reading yet")
+        cache_s = int(config.get("sensor_cache_s"))
+        self.assertGreaterEqual(cache_s, 2 * int(config.get("ccu3_poll_s")))
+        tier, age_s = weather_tier(src.last(), _now_ms(),
+                                   config.get("ccu3_poll_s"), cache_s)
+        self.assertIn(tier, (TIER_FRESH, TIER_CACHED))
+        self.assertGreaterEqual(age_s, 0)
+
 
 class TestPipelineDebugLive(unittest.TestCase):
     """Calculation debug over LIVE data: a fresh pure Controller.tick on the

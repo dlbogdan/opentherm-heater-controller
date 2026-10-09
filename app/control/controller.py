@@ -79,12 +79,18 @@ class Controller:
                 previous_last_sent_flow=previous_last_sent_flow,
                 **kwargs)
 
-        # Failsafe: no outdoor temp -> fixed safe flow, heating on (arch §9).
+        # Failsafe: no outdoor temp -> the HUMAN's flow target (P4: the
+        # persisted ``manual_setpoint``, default 45.0 == the historical
+        # FAILSAFE_FLOW constant; manual mode and the no-sensor failsafe
+        # deliberately share one value -- owner decision 2026-10-09),
+        # heating on (arch §9).
         if t_out is None:
+            failsafe_flow = params.get("manual_setpoint", FAILSAFE_FLOW)
             self.heating_on = True
-            self.last_sent_flow = FAILSAFE_FLOW
-            return decision("heat", target=FAILSAFE_FLOW, heating_on=True,
-                            reason="failsafe: no fresh t_out")
+            self.last_sent_flow = failsafe_flow
+            return decision("heat", target=failsafe_flow, heating_on=True,
+                            reason="failsafe: no fresh t_out "
+                                   "(manual setpoint)")
 
         if lux is None:
             lux = 0.0

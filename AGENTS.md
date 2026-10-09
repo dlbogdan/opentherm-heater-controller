@@ -73,6 +73,13 @@ python micropy-system/tools/target/telnet.py 10.9.30.76 reboot
 # or with stock tools:  telnet 10.9.30.76   /   nc 10.9.30.76 23
 ```
 
+The board's `reboot` over the shell is fire-and-forget: if the promotion
+poll times out, check `status`'s `uptime_s` before blaming OTA — an
+uptime that keeps climbing means the reboot never landed (a busy/flaky
+shell can swallow it). One manual `telnet.py <ip> reboot` then re-poll
+fixes it; the served build is still there, no rebuild needed (the version
+bump, however, is already consumed).
+
 Device test suites (framework `lib.coresys.autotest` + `tools/target/autotest.py`):
 unittest-style suites live in the PROJECT's `autotests/` (host) and run
 remotely inside the live app's loop over the shell's `test run [PATTERN]`
@@ -294,9 +301,14 @@ right one:
 - **WARN/ERROR (to flash):** `CCU3: poll failed`, `CCU3: session expired`,
   `CCU3: last value too stale`, `CCU3: could not write cache`,
   `Rooms: discovery (attempt) failed`, `Rooms: could not write cache`,
-  `Control: apply_decision/transport.tick failed`, `Control: tick failed`
+  `Rooms: demand expired`, `Control: apply_decision/transport.tick failed`,
+  `Control: tick failed`
   (last-resort net around the whole control tick — PLAN.md P3), `App: optional
-  service failed`, `App: [candidate boot]`, `App: [degraded]`.
+  service failed`, `App: [candidate boot]`, `App: [degraded]`. The two
+  stale-cache WARNs (`CCU3: last value too stale`, `Rooms: demand expired`)
+  are **edge-triggered** (one line per transition into expired, never per
+  tick) because the expired cache stays in RAM for the UI/`sources` display
+  — a per-tick WARN would be a flash-write storm.
 
 Do **not** "improve" a periodic INFO log back into the file — that is exactly
 the flash wear this policy avoids. Boot evidence is the OTA process (framework,
@@ -432,6 +444,26 @@ the board ran hotter (base_flow 44.9 vs 43.4 at 7.5 °C → simulated setpoint
 high", not as real overheating. After the full sync, board and HA compute
 identical targets (both 44 at the then-live inputs) -- same pipeline math,
 same parameters.
+
+**Sensor freshness tiers (P4, firmware 1.1.85):** ONE shared expiry
+`sensor_cache_s` (default 14400 s = 4 h; validated `>= 60` and `>= 2x`
+each poll cadence) governs ALL sensor caches (weather + rooms). Tiers per
+source, derived from the sources' own timestamps each control tick: fresh
+(`<= 2x` that source's poll), cached (inside `sensor_cache_s` — the
+last-known value **still steers** the loop, deliberately: rooms/weather
+move slowly), expired (the controller's defined failsafe inputs: flow =
+`manual_setpoint`, demand = no sensor), none (no source / never polled).
+The weather cache is KEPT in RAM past expiry (the old code dropped it) so
+`sources` and the future UI can show the last-known values; the
+`sources` shell command serves `state.data_state` (RAM-only, per-tick) as
+the "working with cached data" flag. The failsafe flow is the config key
+`manual_setpoint` (default 45.0 == the historical constant; domain 5..80;
+NOT clamped by flow_min/flow_max — explicit human intent; the upcoming
+manual mode shares it, its `manual_mode` switch rides with the UI
+milestone). Discovery retry backoff is the separate fixed
+`DISCOVERY_BACKOFF_S = 600`. Do **not** "fix" the cached tier back to
+drop-on-stale — keeping last-known data steering + flagged is the point
+(owner decision 2026-10-09).
 
 The CCU3 client **is now non-blocking (uasyncio)** — `app/ccu3.py` uses
 `asyncio.open_connection` + `wait_for` + bounded `reader.read(512)` chunks, so
@@ -606,6 +638,22 @@ Consequences for this codebase (do not "fix" them away):
   pinning lux == raw x mult against the real sensor), selftest 37/37.
   Episode pinned on the way: this build's `os` has no `.path` (rejected
   1.1.77 candidate; see runtime facts).
+
+- Review-fix P3 + P4 (firmware 1.1.82-1.1.85): P3 control-tick failure
+  net + live proof suite (1.1.82-1.1.84, evidence in PLAN.md). P4 (the
+  1.1.85 deploy): unified sensor cache expiry `sensor_cache_s` (4 h, all
+  sources), fresh/cached/expired/none tiers derived from the sources' own
+  stamps each tick, `state.data_state` + the `sources` shell command (the
+  future UI warning flag), failsafe flow = `manual_setpoint` (45.0
+  default, human-settable, not curve-clamped), edge-triggered stale
+  WARNs, weather cache kept past expiry, discovery backoff split to
+  `DISCOVERY_BACKOFF_S`. Verified on-device 1.1.85 (`--debug`, slot b):
+  selftest 38/38 (new failsafe-follows-manual check), live rooms 6/6 +
+  pipeline 4/4 (new pick_demand/weather_tier cases), `sources`
+  fresh/fresh with ages, config seeded (`sensor_cache_s 14400`,
+  `manual_setpoint 45.0`), log clean. Deploy episode: the fire-and-forget
+  `reboot` was swallowed by a flaky shell (climbing `uptime_s` proved
+  it); one manual reboot promoted cleanly.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

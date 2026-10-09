@@ -5,7 +5,9 @@
   is lifted to a minimum floor. The on/off decision is left unchanged (raising
   the hysteresis floor instead could switch the boiler OFF on a cold day -- the
   wrong direction).
-* **No outdoor temp** falls back to a fixed safe flow (handled in the controller).
+* **No outdoor temp** falls back to the human's flow target (config
+  ``manual_setpoint``, default ``FAILSAFE_FLOW``; P4 -- manual mode and
+  the no-sensor failsafe share one value).
 * **No lux** is treated as 0 (no solar offset) -- handled by the caller.
 """
 

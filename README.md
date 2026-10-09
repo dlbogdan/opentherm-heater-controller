@@ -90,9 +90,15 @@ it): with ``t_out_source`` of ``ccu3``/``auto`` and a ``ccu3_url`` set, the
 loop reads ``t_out`` and ``lux`` from the Homematic CCU3 weather station
 (JSON-RPC over plain HTTP/1.0 on the LAN: login + one-time discovery cached
 to ``/ccu3_cache.json``, then ``Interface.getValue`` per poll). A failed
-poll keeps the last value; a value older than 10 min is dropped, which is
-the controller's defined failsafe input (no fresh ``t_out`` -> fixed safe
-flow). Without a reachable CCU3 (or with an empty ``ccu3_url`` — ``auto``
+poll keeps the last value steering (the "cached" tier) for as long as it is
+within ``sensor_cache_s`` (default 4 h, one expiry shared by ALL sensor
+caches); past that the source reports no reading and the controller uses
+its defined failsafe input (no fresh ``t_out`` -> flow target =
+``manual_setpoint``, the human's setting, default 45 °C). The per-source
+freshness tier (fresh / cached / expired / none) plus its age is recomputed
+every control tick and shown by the ``sources`` shell command -- the same
+state the future UI will use for its "working with cached data" warning.
+Without a reachable CCU3 (or with an empty ``ccu3_url`` — ``auto``
 falls back to the null source) the null source runs instead -- same failsafe
 semantics, so the board degrades safely either way.
 
@@ -118,6 +124,7 @@ python micropy-system/tools/target/telnet.py DEVICE_IP config get t_on       # o
 python micropy-system/tools/target/telnet.py DEVICE_IP config set t_on 15    # set + validate
 python micropy-system/tools/target/telnet.py DEVICE_IP config set mqtt_enabled true
 python micropy-system/tools/target/telnet.py DEVICE_IP rooms                 # all heating groups, one at a time
+python micropy-system/tools/target/telnet.py DEVICE_IP sources                # sensor freshness tiers + ages (UI flag)
 python micropy-system/tools/target/telnet.py DEVICE_IP config reset t_on     # back to default
 python micropy-system/tools/target/telnet.py DEVICE_IP config defaults       # shipped defaults
 ```

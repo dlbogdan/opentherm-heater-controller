@@ -48,9 +48,9 @@ ACTUAL_KEY = "ACTUAL_TEMPERATURE"        # measured room temperature (deg C)
 SETPOINT_MIN_VALID = 5.0
 SETPOINT_MAX_VALID = 30.0
 
-# Retry backoff for a failed discovery (the same scale as
-# Ccu3SensorSource.STALE_LIMIT_S): after a failed full scan, retry at most
-# this often instead of re-scanning on every poll (PLAN.md P2).
+# Retry backoff for a failed discovery (fixed pacing, independent of the
+# data-freshness window ``sensor_cache_s``): after a failed full scan,
+# retry at most this often instead of re-scanning on every poll (PLAN.md P2).
 DISCOVERY_BACKOFF_S = 600
 
 
