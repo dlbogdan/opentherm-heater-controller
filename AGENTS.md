@@ -651,9 +651,14 @@ Consequences for this codebase (do not "fix" them away):
   selftest 38/38 (new failsafe-follows-manual check), live rooms 6/6 +
   pipeline 4/4 (new pick_demand/weather_tier cases), `sources`
   fresh/fresh with ages, config seeded (`sensor_cache_s 14400`,
-  `manual_setpoint 45.0`), log clean. Deploy episode: the fire-and-forget
-  `reboot` was swallowed by a flaky shell (climbing `uptime_s` proved
-  it); one manual reboot promoted cleanly.
+  `manual_setpoint 45.0`), log clean. Degraded-path live proof suite
+  `autotests/test_freshness_live.py` (1.1.87): forced weather/demand
+  expiry prove expired `data_state`, kept cache, failsafe hold ==
+  `manual_setpoint`, and exactly-once edge WARNs on flash; 5/5 PASS.
+  Live config round-trip: `manual_setpoint` accept + reject/repair,
+  `sensor_cache_s` cross-constraint rejection. Deploy episode: the
+  fire-and-forget `reboot` was swallowed by a flaky shell (climbing
+  `uptime_s` proved it); one manual reboot promoted cleanly.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

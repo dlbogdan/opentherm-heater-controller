@@ -214,6 +214,23 @@ board had begun storming `Rooms: poll failed: ENOMEM` after ~40 min
 uptime (heap-fragmentation suspect); the reboot cleared it — recurrence
 would need a look.
 
+**Follow-up hardening (1.1.86-1.1.87, same day).** The first pass had
+never exercised the DEGRADED states live. New `autotests/
+test_freshness_live.py` (P3 patch/restore pattern) proves on the board:
+the .mpy-compiled tier helpers on synthetic old stamps (cached/expired/
+fresh-boundary/wrap), forced weather expiry (old stamp + dead poll) ->
+`data_state` weather=expired, cache KEPT, failsafe hold == `manual_setpoint`
+at the (dummy) boiler, stale WARN exactly-once; forced demand expiry ->
+`data_state` demand=expired + `Rooms: demand expired` WARN exactly-once;
+recovery to fresh + call-shape pins. First run caught a new device-only
+gotcha: the autotest `unittest` shim's `assertAlmostEqual` has no `delta=`
+kwarg (host passes, board ERRORs) — cataloged in `MICROPYTHON-GOTCHAS.md`
+§1. 1.1.87: suite 5/5 PASS, log shows exactly one WARN line per demo,
+`sources` back to fresh/fresh, transport clean. Live config round-trip
+also verified over the shell: `manual_setpoint 50` accepted/persisted,
+`100` REJECTED+repaired, `sensor_cache_s 100` REJECTED (both cross-
+constraints reported), values restored.
+
 ## P5 — Housekeeping (host-only, one commit, no deploy)
 
 - `app/rooms.py:4` docstring: the demand scale is 0..100 percent, not 0..1.

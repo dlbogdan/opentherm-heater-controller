@@ -90,6 +90,18 @@ re-verify before trusting them elsewhere.
 - **Provenance:** 2026-10-04 (bit twice: `telnet_service.py` dispatch + the
   autotest runner). Host tests pin the predicate.
 
+### The autotest `unittest` shim: `assertAlmostEqual` has NO `delta=` kwarg
+- **Symptom:** an autotest passes the whole host suite, then ERRORs
+  on-device with `TypeError: unexpected keyword argument 'delta'` — after
+  any assertions that ran before it (partial evidence, no final pin).
+- **Reality:** the framework's `unittest.py` shim (packaged into `--debug`
+  slots) implements `assertAlmostEqual(places=)` but not the `delta=`
+  keyword CPython has.
+- **Fix:** in `autotests/`, use an explicit
+  `self.assertLess(abs(a - b), tol, msg)` for tolerance checks.
+- **Provenance:** 2026-10-09 (`test_freshness_live` weather-expiry case;
+  fixed same day, 1.1.87).
+
 ---
 
 ## 2. Time & ticks
