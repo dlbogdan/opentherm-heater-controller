@@ -7,6 +7,10 @@
     "SSID": "your-wifi-ssid",
     "PASS": "your-wifi-password"
   },
+  "AUTOTEST": {
+    "TEST_TIMEOUT_S": 60,
+    "HEAP_FLOOR": 40000
+  },
   "FIRMWARE": {
     "GITHUB_REPO": "owner/application-repository",
     "GITHUB_TOKEN": "",
