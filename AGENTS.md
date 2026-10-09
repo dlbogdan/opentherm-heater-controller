@@ -794,6 +794,23 @@ Consequences for this codebase (do not "fix" them away):
   hash-ordered -- gotcha catalog). Live: `config boiler` key order exact,
   autotest `test run config` 8/8. Host suite 230 green. Local
   `app-config.json` + `app-config.example.json` rewritten to the layout.
+- Case-insensitive config refs (firmware 1.1.103): section AND key matching
+  any case in `config get/set/reset` (the listing already was; `resolve()`
+  wasn't -- owner-found inconsistency), canonical spelling echoed, flat-ref
+  hints match any case. Live on the owner's exact failing sequence.
+- Shell resource grammar for `rooms`/`sensors`/`test` (firmware 1.1.104-
+  1.1.105, framework `88b6c99`): one shape across the data commands (bare
+  = names, `all` = everything, `<NAME>` = one item, `get/set
+  <NAME>.<field>`, verbs for actions; quote-aware refs, last-dot field
+  split, case-insensitive, NO old-subcommand aliases). Room CARDS merge the
+  durable registry with this pass's readings (new `room_data` map in the
+  poll aggregate; readings only for rooms present in the pass); only
+  `weight` writable. `sensors` = weather/demand cards, read-only (its `set`
+  error names the `SENSORS_CONFIG.*` key). Framework: bare `test` lists
+  suites (was: run everything), `test list` dropped -- board `/lib/coresys`
+  picks this up only at provisioning/USB push, not OTA. Live: card 1021
+  with live readings, weight round-trip reverted to production 1.0,
+  old-verb hint, rooms_weights autotest 3/3. Host 245 + framework 127 green.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),
