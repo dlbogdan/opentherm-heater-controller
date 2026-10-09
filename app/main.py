@@ -286,33 +286,56 @@ async def main():
         logger.info("App: rooms poll started (every %ds)." % rooms.poll_s)
 
     async def control_tick():
-        # Fetch the (possibly I/O-bound) weather reading first -- the only
-        # async part of this tick; the pure tick below stays sync + testable.
-        # The tick waits (bounded, 30 s) for Wi-Fi instead of skipping: no
-        # failing read before connect, and the first real reading lands right
-        # after connect; still down when the window expires -> failsafe input
-        # (t_out is None) exactly as before.
-        if await _net_ready(30 * 1000):
-            t_out, lux, _ = await sensor_source.read()
-        else:
-            t_out, lux = None, None
-        # Heating demand from the cached room aggregate -- the ReGaHd
-        # ``demand_pct`` in PERCENT (0..100, the same scale as
-        # ``demand_neutral``). None before the first pass, or with no room
-        # backend: the defined "no sensor" input (zero offset, permissive
-        # gate). The P-term/gate itself is enabled by ``demand_enabled``
-        # (wired onto the controller below).
-        demand = None
-        agg = rooms.last()
-        if agg and agg.get("demand_pct") is not None:
-            demand = agg["demand_pct"]
+        # Last-resort net (PLAN.md P3): make control-tick failures visible.
+        # The framework catches per-tick exceptions, but its default
+        # listener's line is generic ("SystemManager: Task control failed")
+        # and /lib/coresys is only as fresh as the last provisioning -- the
+        # app carries its OWN domain-level containment, mirroring rooms_tick
+        # and reassert_tick. run_control_tick's granular handlers (apply_
+        # decision / transport.tick) keep their better messages and fire
+        # first; this net catches everything else that escapes the tick
+        # (_net_ready, the sensor read outside its own containment, rooms.
+        # last(), config.all(), the pure controller.tick). On a raise the
+        # tick aborts: no decision, no latch persist; the independent re-
+        # assert task keeps the last CS alive (documented standalone
+        # behavior) and the next tick retries. At most the solar
+        # accumulator advanced mid-tick (self-correcting, dt-capped) --
+        # the heating_on/last_sent_flow assignments never complete, so no
+        # rate-limiter lie is introduced.
+        try:
+            # Fetch the (possibly I/O-bound) weather reading first -- the
+            # only async part of this tick; the pure tick below stays sync
+            # + testable. The tick waits (bounded, 30 s) for Wi-Fi instead
+            # of skipping: no failing read before connect, and the first
+            # real reading lands right after connect; still down when the
+            # window expires -> failsafe input (t_out is None) exactly as
+            # before.
+            if await _net_ready(30 * 1000):
+                t_out, lux, _ = await sensor_source.read()
+            else:
+                t_out, lux = None, None
+            # Heating demand from the cached room aggregate -- the ReGaHd
+            # ``demand_pct`` in PERCENT (0..100, the same scale as
+            # ``demand_neutral``). None before the first pass, or with no
+            # room backend: the defined "no sensor" input (zero offset,
+            # permissive gate). The P-term/gate itself is enabled by
+            # ``demand_enabled`` (wired onto the controller below).
+            demand = None
+            agg = rooms.last()
+            if agg and agg.get("demand_pct") is not None:
+                demand = agg["demand_pct"]
 
-        def read_sensors():
-            return (t_out, lux, demand)
+            def read_sensors():
+                return (t_out, lux, demand)
 
-        run_control_tick(
-            controller, transport, state, config.all(), read_sensors,
-            time.ticks_ms(), log=log, warn=warn)
+            run_control_tick(
+                controller, transport, state, config.all(), read_sensors,
+                time.ticks_ms(), log=log, warn=warn)
+        except Exception as exc:
+            # WARN -> flash (logging policy); consumes the exception, so
+            # the framework's generic TASK_FAILED line stops firing for
+            # this task: flash writes stay 1/tick on a persistent failure.
+            warn("Control: tick failed: %s" % exc)
 
     tick_s = int(config.get("control_tick_s"))
     tasks.create_periodic_task(

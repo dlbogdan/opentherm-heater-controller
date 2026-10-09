@@ -294,8 +294,9 @@ right one:
 - **WARN/ERROR (to flash):** `CCU3: poll failed`, `CCU3: session expired`,
   `CCU3: last value too stale`, `CCU3: could not write cache`,
   `Rooms: discovery (attempt) failed`, `Rooms: could not write cache`,
-  `Control: apply_decision/transport.tick failed`, `App: optional service
-  failed`, `App: [candidate boot]`, `App: [degraded]`.
+  `Control: apply_decision/transport.tick failed`, `Control: tick failed`
+  (last-resort net around the whole control tick — PLAN.md P3), `App: optional
+  service failed`, `App: [candidate boot]`, `App: [degraded]`.
 
 Do **not** "improve" a periodic INFO log back into the file — that is exactly
 the flash wear this policy avoids. Boot evidence is the OTA process (framework,

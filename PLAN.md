@@ -92,25 +92,47 @@ clears the marker); also fixed 8 pre-existing `TemporaryDirectory` leaks in
 `tests/test_pipeline_e2e.py` (ResourceWarnings). Device: 1.1.80 promoted,
 selftest 37/37, live suites 24/24, heap healthy.
 
-## P3 — Make control-tick failures visible (boiler-pinning blind spot)
+## P3 — Make control-tick failures visible (boiler-pinning blind spot) — COMPLETE
 
-**Problem.** The framework contains per-tick exceptions but only emits a
-`TASK_FAILED` event (`manager_tasks.py:195-207`); the app registers no
-listener, so the failure is silent (nothing on console, nothing in
-`/log.txt`). `rooms_tick` wraps its own body with `warn`, but `control_tick`
-(`app/main.py:253-280`) has no top-level containment. A persistently failing
-control tick therefore goes unnoticed while the independent re-assert task
-keeps the last CS alive indefinitely.
+**Problem (premise corrected 2026-10-09 against the pinned framework).** The
+failure was never fully SILENT: `TaskManager.__init__` registers a DEFAULT
+listener since the framework's first commit (`manager_tasks.py:33` ->
+`_on_task_event` -> `logger.error`, which writes to flash by default), so a
+failing periodic tick lands a line. The real gap: that line is GENERIC
+("SystemManager: Task control failed with error: ...") — no domain context
+for which stage escaped or whether actuation ran — and the app must not
+depend on framework-owned plumbing for its own diagnosability (`/lib/coresys`
+is only as fresh as the last provisioning; same reasoning as the autotest
+registration). `control_tick` was also the ONLY periodic task without an
+app-level net (`rooms_tick` and the re-assert tick already have one).
 
 **Fix.** Wrap the `control_tick` body in `try/except Exception` →
 `warn("Control: tick failed: %s" % exc)` (flash-logged, mirrors `rooms_tick`).
 Keep the existing granular handlers inside `run_control_tick` (they carry
-better messages); the wrapper is the last-resort net.
+better messages); the wrapper is the last-resort net. The wrapper CONSUMES
+the exception, so the framework's generic line stops firing for this task:
+flash writes stay 1/tick on a persistent failure (no wear regression). On a
+raise the tick aborts (no decision, no latch persist; the re-assert task
+keeps the last CS alive, next tick retries) — at most the solar accumulator
+advanced mid-tick (self-correcting, dt-capped), so no rate-limiter lie is
+introduced.
 
 **Verify.** Device: deploy, `selftest` green, one `log` check; the wrapper is
 evidence by construction (an injected failure on a production boiler is not
 worth the risk — the host suite already pins `run_control_tick`'s inner
 containment).
+
+**Done (firmware 1.1.82, 2026-10-09).** Wrapper in `app/main.py` (whole
+`control_tick` body -> try/except -> `warn("Control: tick failed: %s")`).
+Host suite green (158, no test changes — the wrapper is device-only
+`main.py`). Device: 1.1.82 promoted (slot a; the 1.1.81 bump was consumed by
+an aborted deploy whose LAN discovery failed BEFORE any board contact —
+version file and board agree at 1.1.82), selftest 37/37, `log` shows only
+the expected OTA/candidate lines (wrapper silent on the happy path),
+`transport commands` shows the loop ticking (CH=1 + CS=40 acked). Episode
+note: the board's shell was occupied by another client pre-deploy (raw
+socket probe answered "busy: one client at a time" — GOTCHAS §5 pattern,
+not a board fault).
 
 ## P4 — Enforce demand freshness in the control loop
 
