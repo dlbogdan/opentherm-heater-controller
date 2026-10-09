@@ -270,6 +270,18 @@ re-verify before trusting them elsewhere.
   (`deploy.py --usb` and `provision.py` do this deliberately). Full rule in
   AGENTS.md "Critical: USB tools stop the running application".
 
+### `KeyError: 1022` — MicroPython prints the key WITHOUT quotes
+- **Symptom (2026-10-09, live autotest):** a device test failed with
+  `KeyError: 1022`, strongly suggesting an int key vs a str-keyed dict
+  (CPython would print `'1022'`). No type mismatch existed: the lookup key
+  WAS the string `"1022"`; the entry was simply absent (a mode-excluded
+  room has no `room_data` entry).
+- **Reality:** MicroPython's exception output renders the KeyError arg
+  unquoted, so str and int keys are indistinguishable in the traceback.
+- **Fix:** when a device KeyError shows a bare number, check for a MISSING
+  key before suspecting types — and prefer `.get()` + an explicit assert in
+  autotests so the failure names the real condition.
+
 ---
 
 ## 6. Network & peripherals (live-only behavior — do not "fix" into regressions)
