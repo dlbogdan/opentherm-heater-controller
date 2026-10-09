@@ -54,10 +54,10 @@ class State:
         # Runtime-only (never persisted, recomputed every control tick, P4):
         # what the loop ACTUALLY holds per sensor source --
         # {"weather": tier, "weather_age_s": s, "demand": tier,
-        #  "demand_age_s": s, "cache_s": s}. The `sources` shell command
-        # serves it; the future UI warning = any tier in cached|expired.
-        # RAM-only by design: a per-tick flash write would violate the
-        # logging policy.
+        #  "demand_age_s": s, "cache_s": s}. This is the future UI warning
+        # flag; the `sensors` shell command reports the same tiers but
+        # recomputes age live at query time. RAM-only by design: a
+        # per-tick flash write would violate the logging policy.
         self.data_state = None
         self._load()
 

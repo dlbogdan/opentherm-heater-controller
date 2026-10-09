@@ -20,7 +20,7 @@ warning flag) -- never a separately maintained boolean.
 from control.util import elapsed_ms
 
 # Freshness tiers (shared by every sensor source; strings so they ride
-# straight into the `sources` JSON / UI).
+# straight into the `sensors` JSON / UI).
 TIER_FRESH = "fresh"      # polled within its own cadence
 TIER_CACHED = "cached"    # last-known value, still steering + UI flag
 TIER_EXPIRED = "expired"  # beyond sensor_cache_s: controller failsafes

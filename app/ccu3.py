@@ -260,7 +260,7 @@ class Ccu3SensorSource:
         if _diff_ms(now, ts) > self._cache_limit_ms():
             # Expired: the CONTROLLER sees the defined failsafe input,
             # but the cache itself is KEPT -- last-known data for the
-            # `sources` command and the UI (P4). The WARN is
+            # `sensors` command and the UI (P4). The WARN is
             # edge-triggered (one flash line per transition into
             # expired, never one per tick -- logging policy).
             if not self._expired_warned:

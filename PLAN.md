@@ -186,8 +186,9 @@ rather than the human's target.
   WARN is edge-triggered (one flash line per transition, never per tick —
   logging policy). Same for demand (`Rooms: demand expired` edge WARN).
 - `state.data_state` (RAM-only, recomputed every tick) IS the "working
-  with cached data" flag for the future UI; the new `sources` shell
-  command serves it as JSON (tiers + ages + the window).
+  with cached data" flag for the future UI; the new `sensors` shell
+  command (originally `sources`, renamed after owner feedback with live
+  age + last-known readings) reports the same state at query time.
 - Failsafe flow = new config key `manual_setpoint` (default 45.0 == the
   historical `FAILSAFE_FLOW`, so behavior is unchanged until a human
   sets it; domain 5..80; deliberately NOT clamped by flow_min/flow_max —

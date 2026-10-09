@@ -192,7 +192,7 @@ class Ccu3SourceTests(unittest.TestCase):
 
     def test_value_beyond_cache_window_reports_no_reading_but_keeps_cache(self):
         # P4: past sensor_cache_s the CONTROLLER sees the failsafe input,
-        # but the last-known value is KEPT (for `sources`/UI display).
+        # but the last-known value is KEPT (for `sensors`/UI display).
         import ccu3
         failing = Ccu3SensorSource(
             FakeConfig(sensor_cache_s=600), cache_path=self.cache,

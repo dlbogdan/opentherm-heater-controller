@@ -307,7 +307,7 @@ right one:
   service failed`, `App: [candidate boot]`, `App: [degraded]`. The two
   stale-cache WARNs (`CCU3: last value too stale`, `Rooms: demand expired`)
   are **edge-triggered** (one line per transition into expired, never per
-  tick) because the expired cache stays in RAM for the UI/`sources` display
+  tick) because the expired cache stays in RAM for the UI/`sensors` display
   — a per-tick WARN would be a flash-write storm.
 
 Do **not** "improve" a periodic INFO log back into the file — that is exactly
@@ -454,9 +454,10 @@ last-known value **still steers** the loop, deliberately: rooms/weather
 move slowly), expired (the controller's defined failsafe inputs: flow =
 `manual_setpoint`, demand = no sensor), none (no source / never polled).
 The weather cache is KEPT in RAM past expiry (the old code dropped it) so
-`sources` and the future UI can show the last-known values; the
-`sources` shell command serves `state.data_state` (RAM-only, per-tick) as
-the "working with cached data" flag. The failsafe flow is the config key
+`sensors` and the future UI can show the last-known values; the
+`sensors` shell command reports the tiers with **live** age (recomputed
+at query time from the sources' stamps) plus the last-known readings;
+`state.data_state` (RAM-only, per-tick) is the UI warning flag. The failsafe flow is the config key
 `manual_setpoint` (default 45.0 == the historical constant; domain 5..80;
 NOT clamped by flow_min/flow_max — explicit human intent; the upcoming
 manual mode shares it, its `manual_mode` switch rides with the UI
@@ -643,13 +644,14 @@ Consequences for this codebase (do not "fix" them away):
   net + live proof suite (1.1.82-1.1.84, evidence in PLAN.md). P4 (the
   1.1.85 deploy): unified sensor cache expiry `sensor_cache_s` (4 h, all
   sources), fresh/cached/expired/none tiers derived from the sources' own
-  stamps each tick, `state.data_state` + the `sources` shell command (the
+  stamps each tick, `state.data_state` + the `sensors` shell command (the
   future UI warning flag), failsafe flow = `manual_setpoint` (45.0
   default, human-settable, not curve-clamped), edge-triggered stale
   WARNs, weather cache kept past expiry, discovery backoff split to
   `DISCOVERY_BACKOFF_S`. Verified on-device 1.1.85 (`--debug`, slot b):
   selftest 38/38 (new failsafe-follows-manual check), live rooms 6/6 +
-  pipeline 4/4 (new pick_demand/weather_tier cases), `sources`
+  pipeline 4/4 (new pick_demand/weather_tier cases), `sensors` (then
+  named `sources`)
   fresh/fresh with ages, config seeded (`sensor_cache_s 14400`,
   `manual_setpoint 45.0`), log clean. Degraded-path live proof suite
   `autotests/test_freshness_live.py` (1.1.87): forced weather/demand

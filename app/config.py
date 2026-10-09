@@ -58,7 +58,7 @@ DEFAULTS = {
     # Sensor cache expiry (seconds) -- ONE expiry window for ALL sensor
     # caches (weather + rooms; owner decision 2026-10-09). Within it, a
     # source whose polls fail keeps steering the control loop on its
-    # last-known value (the "cached" tier -- `sources` shell command and
+    # last-known value (the "cached" tier -- `sensors` shell command and
     # the future UI warning flag it). Past it the controller degrades to
     # its defined failsafe inputs (flow = manual_setpoint, demand =
     # "no sensor"). Must exceed both poll cadences so the cached tier

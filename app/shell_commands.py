@@ -19,6 +19,10 @@ from transport.audit import decode_record, format_record, RECORD_SIZE
 from transport.log import JSON_SNAPSHOT, RAW_SNAPSHOT
 from transport.opentherm import build_frame
 
+from ccu3 import _now_ms
+from rooms import pick_demand
+from sensors import weather_tier
+
 DEFAULT_LIMIT = 16
 MAX_LIMIT = 64
 USAGE = ("usage: transport status|commands [N] [text|json]|"
@@ -327,35 +331,50 @@ def register_rooms_commands(shell, groups):
     )
 
 
-# ------------------------------------------------------------------- sources
+# ------------------------------------------------------------------- sensors
 
-SOURCES_USAGE = "usage: sources   # sensor freshness tiers + ages (UI flag)"
+SENSORS_USAGE = "usage: sensors   # live freshness + last-known readings"
 
 
-def make_sources_handler(state):
-    """Return a shell callback showing what the loop ACTUALLY holds (P4).
+def make_sensors_handler(sensor_source, rooms, config):
+    """Return a shell callback reporting LIVE sensor freshness + readings.
 
-    Per-source freshness tiers derived from the sources' own timestamps
-    each control tick (fresh / cached / expired / none) plus the ages and
-    the shared ``sensor_cache_s`` window. The future UI warning flag is
-    exactly this state (any tier in cached|expired).
+    Age and tier are recomputed AT QUERY TIME from the sources' own
+    stamps (the per-tick ``state.data_state`` snapshot can lag by up to
+    ``control_tick_s``; that snapshot stays the UI flag by design). The
+    values are the last-known readings the loop steers on -- kept even
+    past expiry (P4), which is the point of the cached/expired tiers.
+    ``lux`` is the EFFECTIVE lux (already multiplied by ``lux_mult``).
     """
 
     def handle(args=""):
         if args.split():
-            return SOURCES_USAGE
-        data = state.data_state
-        if data is None:
-            return "no sensor state yet (first control tick pending)"
-        return json.dumps(data)
+            return SENSORS_USAGE
+        now = _now_ms()
+        cache_s = int(config.get("sensor_cache_s"))
+        values = (sensor_source.last()
+                  if hasattr(sensor_source, "last") else None)
+        weather, weather_age = weather_tier(
+            values, now, config.get("ccu3_poll_s"), cache_s)
+        agg = rooms.last()
+        _value, demand_tier, demand_age = pick_demand(
+            agg, now, rooms.poll_s, cache_s)
+        return json.dumps({
+            "weather": {"tier": weather, "age_s": weather_age,
+                        "t_out": values[0] if values else None,
+                        "lux": values[1] if values else None},
+            "demand": {"tier": demand_tier, "age_s": demand_age,
+                       "demand_pct": agg.get("demand_pct") if agg else None},
+            "cache_s": cache_s,
+        })
 
     return handle
 
 
-def register_sources_commands(shell, state):
-    """Register the sensor-freshness viewer on a framework TelnetService."""
+def register_sensors_commands(shell, sensor_source, rooms, config):
+    """Register the live sensor-freshness viewer on a TelnetService."""
     shell.add(
-        "sources",
-        make_sources_handler(state),
-        "sensor freshness: weather/demand tiers + ages (UI warning flag)",
+        "sensors",
+        make_sensors_handler(sensor_source, rooms, config),
+        "live sensor freshness + last-known readings (tiers, ages, values)",
     )

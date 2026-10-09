@@ -96,7 +96,9 @@ caches); past that the source reports no reading and the controller uses
 its defined failsafe input (no fresh ``t_out`` -> flow target =
 ``manual_setpoint``, the human's setting, default 45 °C). The per-source
 freshness tier (fresh / cached / expired / none) plus its age is recomputed
-every control tick and shown by the ``sources`` shell command -- the same
+every control tick and reported live by the ``sensors`` shell command
+(freshness + age + the last-known readings, recomputed at query time) --
+the same
 state the future UI will use for its "working with cached data" warning.
 Without a reachable CCU3 (or with an empty ``ccu3_url`` — ``auto``
 falls back to the null source) the null source runs instead -- same failsafe
@@ -124,7 +126,7 @@ python micropy-system/tools/target/telnet.py DEVICE_IP config get t_on       # o
 python micropy-system/tools/target/telnet.py DEVICE_IP config set t_on 15    # set + validate
 python micropy-system/tools/target/telnet.py DEVICE_IP config set mqtt_enabled true
 python micropy-system/tools/target/telnet.py DEVICE_IP rooms                 # all heating groups, one at a time
-python micropy-system/tools/target/telnet.py DEVICE_IP sources                # sensor freshness tiers + ages (UI flag)
+python micropy-system/tools/target/telnet.py DEVICE_IP sensors                 # live freshness + last-known readings
 python micropy-system/tools/target/telnet.py DEVICE_IP config reset t_on     # back to default
 python micropy-system/tools/target/telnet.py DEVICE_IP config defaults       # shipped defaults
 ```

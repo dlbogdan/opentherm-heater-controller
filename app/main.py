@@ -325,7 +325,7 @@ async def main():
             # whole fresh/cached/expired policy (host-pinned in rooms.py,
             # one shared sensor_cache_s expiry), and the weather tier is
             # derived from the source's cached stamp. The tier feeds
-            # state.data_state (RAM-only; `sources` shell command; the
+            # state.data_state (RAM-only; `sensors` shell command; the
             # future UI warning flag). Expired -> the controller's
             # defined failsafe inputs.
             cache_s = int(config.get("sensor_cache_s"))
@@ -415,12 +415,12 @@ async def main():
         shell.add("selftest", _run_selftest, "run the control-core self-test")
         from shell_commands import (register_config_commands,
                                     register_rooms_commands,
-                                    register_sources_commands,
+                                    register_sensors_commands,
                                     register_transport_commands)
         register_transport_commands(shell, transport)
         register_config_commands(shell, config)
         register_rooms_commands(shell, rooms)
-        register_sources_commands(shell, state)
+        register_sensors_commands(shell, sensor_source, rooms, config)
         # Device test suites (framework runner): unittest-style suites are
         # pushed to /autotests by the host tool (tools/target/autotest.py)
         # or OTA'd INSIDE the slot by a --debug build (deploy.py --debug).
