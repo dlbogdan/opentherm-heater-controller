@@ -149,6 +149,17 @@ in `log`. Costs per run: one intentional WARN flash line + 1-2 aborted
 ticks (no actuation — the net aborts before the decision; re-assert task
 keeps the dummy CS alive).
 
+**Incident (same day — caught by the net ITSELF):** the suite's first
+restore used `src.read = type(src).read` — an instance attr holding the
+UNBOUND function (no `self`): every live tick then failed with "function
+takes 1 positional arguments but 0 were given", visible as a 60 s WARN
+stream — the P3 net doing exactly its job, degradation safe (dummy
+transport, re-assert held the CS). Fixed: restore via `del src.read`;
+the restore case now performs the loop's exact call shape
+(`await src.read()`) — the pin the identity check missed. 1.1.84
+(`--debug`): suite 2/2 PASS, exactly ONE demo WARN in the log, no
+recurrence past the next tick. Cataloged in `MICROPYTHON-GOTCHAS.md` §1.
+
 ## P4 — Enforce demand freshness in the control loop
 
 **Problem.** `HeatingGroups.read()` stamps `"ts"` on the aggregate explicitly

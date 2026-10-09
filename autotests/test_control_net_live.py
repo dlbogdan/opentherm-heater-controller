@@ -84,9 +84,18 @@ class TestControlTickNet(unittest.TestCase):
         return tail
 
     def _restore(self):
-        # Instance attr back to the class method: the live loop resumes
-        # real polls on the next tick. Idempotent (tearDown may re-run it).
-        self.src.read = type(self.src).read
+        # DELETE the instance attr so the CLASS method resolves again.
+        # NEVER "restore" with src.read = type(src).read: that binds the
+        # UNBOUND function into the instance dict (no descriptor, no self)
+        # and every live tick then dies with "function takes 1 positional
+        # argument but 0 were given" -- exactly what this suite briefly
+        # did to the running board on 2026-10-09 (the P3 net caught it
+        # every tick; see MICROPYTHON-GOTCHAS). Idempotent: tearDown may
+        # re-run it after the test's finally already did.
+        try:
+            del self.src.read
+        except AttributeError:
+            pass
 
     def tearDown(self):
         # The runner runs tearDown even when the test times out, so the
@@ -96,15 +105,24 @@ class TestControlTickNet(unittest.TestCase):
 
 
 class TestLiveSourceRestored(unittest.TestCase):
-    """The patch class ran first (sorted order): prove it left no debris.
+    """The patch class ran first (sorted order): prove the loop works again.
 
-    ``read`` must resolve to the class method again -- a leftover boom in
-    the live singleton would be the worst device-only regression possible.
+    The assertion must pin the CALL SHAPE the control loop uses
+    (``await sensor_source.read()``), not identity: an instance attr
+    holding the unbound class function passes an identity check yet
+    breaks every live tick (self is never passed). Doing one real read
+    through the app's own source is read-only and proves the binding.
     """
 
-    def test_live_source_restored(self):
+    timeout_s = 30  # one real weather poll: ~2 RPCs at ~2.8 s + margin
+
+    async def test_live_source_restored(self):
         src = app_entry.LIVE.get("sensor_source")
         if src is None:
             raise unittest.SkipTest("no live sensor source wired")
-        self.assertIs(src.read, type(src).read,
-                      "live sensor source still patched -- net suite leaked")
+        result = await src.read()  # the loop's exact call shape
+        self.assertIsInstance(result, tuple,
+                              "live read() did not return a tuple -- "
+                              "the net suite leaked a bad binding")
+        self.assertEqual(len(result), 3,
+                         "live read() returned the wrong shape")

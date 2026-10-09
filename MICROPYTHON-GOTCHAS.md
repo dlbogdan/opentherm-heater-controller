@@ -57,6 +57,27 @@ re-verify before trusting them elsewhere.
 - `uasyncio.create_task` **exists**; `uasyncio.ensure_future` **does not**.
 - `uasyncio.sleep_ms` exists; `uasyncio.sleep(seconds)` accepts fractions.
 
+### Restoring a monkey-patched method: `obj.m = type(obj).m` leaves an UNBOUND function
+- **Symptom:** every live call raises `function takes 1 positional
+  arguments but 0 were given` (CPython words it `missing 1 required
+  positional argument: 'self'`). Live episode: the control tick failed
+  every 60 s and `/log.txt` streamed `Control: tick failed: ...` lines.
+- **Reality:** instance-attr lookup wins over the class and does NOT go
+  through the descriptor protocol — `type(obj).m` is a plain function, so
+  assigning it into the instance dict means calls never receive `self`.
+  An identity assert (`obj.m is type(obj).m`) PASSES on this broken
+  state; only the consumer's CALL SHAPE exposes it.
+- **Fix:** restore with `del obj.m` (guard `AttributeError` for
+  idempotence). Any suite that patches a LIVE singleton must end by
+  exercising the exact consumer call (e.g. `await src.read()`), never an
+  identity check.
+- **Provenance:** 2026-10-09. `autotests/test_control_net_live.py`'s own
+  restore broke the running board's control loop for ~40 min (degraded
+  SAFELY: the re-assert task held the dummy CS; the P3 net made it
+  visible every tick — the net catching the suite's own bug). Fixed the
+  same day: `del`-restore + call-shape assertion (1.1.84, suite 2/2,
+  exactly one demo WARN, no recurrence).
+
 ### An `async def` result has NO `__await__`
 - **Symptom:** coroutines silently treated as values — the shell printed
   `<generator object ...>` as command output; the autotest runner vacuously
