@@ -297,7 +297,9 @@ def make_config_handler(config):
 
     Secret values are masked in every reply (see ``_shown``): the telnet
     shell is unauthenticated on the LAN, so ``config`` must never put a
-    credential on the wire.
+    credential on the wire. Keys whose value is latched at boot
+    (``config.reboot_keys``) get ``(reboot required)`` appended to their
+    OK replies -- the write persists, but only the next boot applies it.
     """
     defaults = config.defaults
     key_section = {}
@@ -305,6 +307,12 @@ def make_config_handler(config):
         for key in keys:
             key_section[key] = section
     key_lower = dict((k.lower(), k) for k in defaults)
+    # Boot-latched keys (config_schema.REBOOT_KEYS): the write persists and
+    # lands on the NEXT boot; say so instead of implying a live effect (Bug 1).
+    reboot_keys = getattr(config, "reboot_keys", ())
+
+    def _reboot_note(key):
+        return " (reboot required)" if key in reboot_keys else ""
 
     def resolve(ref):
         """'SECTION.KEY' -> (SECTION, canonical key, None) or an error.
@@ -362,7 +370,8 @@ def make_config_handler(config):
             if current == value:
                 note = ("" if not problems
                         else " (also repaired: %s)" % "; ".join(problems))
-                return "OK: %s = %s%s" % (ref, _shown(key, current), note)
+                return "OK: %s = %s%s%s" % (ref, _shown(key, current), note,
+                                            _reboot_note(key))
             return ("REJECTED: %s = %s is invalid; reset to %s. %s"
                     % (ref, _shown(key, value), _shown(key, current),
                        "; ".join(problems)))
@@ -373,9 +382,10 @@ def make_config_handler(config):
                 return err
             config.set(key, defaults[key])
             problems = config.validate()
-            return "OK: %s.%s reset to %s%s" % (
+            return "OK: %s.%s reset to %s%s%s" % (
                 section, key, _shown(key, config.get(key)),
-                "" if not problems else " (repaired: %s)" % "; ".join(problems))
+                "" if not problems else " (repaired: %s)" % "; ".join(problems),
+                _reboot_note(key))
 
         section = command.upper()
         if len(parts) == 1 and section in config.sections:

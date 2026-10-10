@@ -65,6 +65,12 @@ class FakeConfig:
     def section_keys(self):
         return self._sections  # section -> ordered key list
 
+    @property
+    def reboot_keys(self):
+        # Mirrors the real schema: net_port + transport are boot-latched,
+        # t_on/t_off/b/ccu3_* are re-read where they act.
+        return ("net_port", "transport")
+
     def get(self, key):
         if key not in self.defaults:
             raise KeyError(key)
@@ -231,6 +237,30 @@ class ConfigHandlerTests(unittest.TestCase):
         self.assertIn("OK: HEATING_PARAMS.t_on reset to 13.0",
                       self.handle("reset HEATING_PARAMS.t_on"))
         self.assertEqual(self.config.get("t_on"), 13.0)
+
+    # --- boot-latched keys: honest echo (Bug 1) ------------------------------
+
+    def test_set_live_key_has_no_reboot_note(self):
+        self.assertNotIn("reboot", self.handle("set HEATING_PARAMS.t_on 15"))
+
+    def test_set_boot_latched_key_marks_reboot_required(self):
+        out = self.handle("set SHELL.net_port 8080")
+        self.assertIn("OK: SHELL.net_port = 8080", out)
+        self.assertTrue(out.endswith("(reboot required)"), out)
+
+    def test_set_latched_string_key_marks_reboot(self):
+        self.assertIn("(reboot required)",
+                      self.handle("set BOILER.transport direct_ot_dummy"))
+
+    def test_reset_latched_key_marks_reboot(self):
+        out = self.handle("reset SHELL.net_port")
+        self.assertIn("OK: SHELL.net_port reset to 23", out)
+        self.assertTrue(out.endswith("(reboot required)"), out)
+
+    def test_rejected_latched_set_has_no_reboot_note(self):
+        out = self.handle("set SHELL.net_port 99999")
+        self.assertIn("REJECTED", out)
+        self.assertNotIn("reboot", out)  # nothing landed, no reboot implied
 
     # --- secret masking (the telnet shell is unauthenticated on the LAN) ---
 

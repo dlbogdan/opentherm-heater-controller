@@ -25,8 +25,8 @@ framework-free so they can be unit-tested on a host.)
 import lib.coresys.logger as logger
 from lib.coresys.manager_config import ConfigManager
 
-from config_schema import (DEFAULTS, KEY_SECTION, SECTIONS, SECTION_KEYS,
-                           SECTION_ORDER)
+from config_schema import (DEFAULTS, KEY_SECTION, REBOOT_KEYS, SECTIONS,
+                           SECTION_KEYS, SECTION_ORDER)
 
 # App-owned runtime config (the file the app/user edits most). Named to pair
 # with the framework's /system-config.json; both live outside the A/B slots
@@ -91,6 +91,13 @@ class Config:
     def section_keys(self):
         """Section -> its keys in display order (source-declared, not dict)."""
         return SECTION_KEYS
+
+    @property
+    def reboot_keys(self):
+        """Keys whose value is latched at boot (``config_schema.REBOOT_KEYS``):
+        a shell write persists but only takes effect on the next boot -- the
+        shell marks their replies ``(reboot required)``."""
+        return REBOOT_KEYS
 
     def validate(self):
         """Validate types, domains, and §6 cross-key constraints.

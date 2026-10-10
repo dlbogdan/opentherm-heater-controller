@@ -384,13 +384,16 @@ from the shipped defaults, or re-provisioned with the sectioned
 `sensors` share ONE shape (the `config` grammar generalized): bare command =
 the NAMES that exist; `all` = every item; `<NAME>` = one item; `get/set
 <NAME>.<field> [VALUE]` = field-level access; genuine actions stay verbs
-(`config reset`, `rooms forget`, `test run`). Ref mechanics: the LAST `.`
-splits ref from field; room names with spaces accept decorative quotes
+(`config reset`, `rooms forget`/`remember`, `test run`). Ref mechanics: the
+LAST `.` splits ref from field; room names with spaces accept decorative quotes
 (`rooms set "Clima Dormitor".weight 0.5`) and still work unquoted (all
 tokens between verb and value are the ref); section/field/key matching is
-case-insensitive, canonical spelling echoed. `sensors` is READ-ONLY (its
-`set` error points at the `SENSORS_CONFIG.*` key that actually changes the
-behavior); `rooms` is the hybrid: registry knobs (`weight`) + live readings
+case-insensitive, canonical spelling echoed. `config set`/`reset` replies on
+keys latched at boot (`config_schema.REBOOT_KEYS`) end with
+`(reboot required)` -- the write persists, only the next boot applies it.
+`sensors` is READ-ONLY (its `set` error points at the `SENSORS_CONFIG.*` key
+that actually changes the behavior); `rooms` is the hybrid: registry knobs
+(`weight`) + live readings
 in one card. NO aliases for the old subcommands (`rooms weights`, `rooms
 weight`, `config list` are gone -- owner decision, early development). The
 framework runner follows the same shape (bare `test` = list, `test run`
@@ -471,7 +474,10 @@ board's persisted `/app-config.json` (and the local provisioning
 automation that drives the boiler today. **The HA blueprint is the source of
 truth for these values; whenever its variables change, re-sync the board
 (`config set` over the shell takes effect on the next control tick, no
-reboot) and the local provisioning copy.** The 2026-10-08 full sync (values
+reboot — true for every key the calibration cluster uses; keys whose value
+is latched at boot live in `config_schema.REBOOT_KEYS`, and the shell marks
+their replies `(reboot required)`) and the local provisioning copy.** The
+2026-10-08 full sync (values
 confirmed live on the board): `t_design -20, curve_base 29, flow_design 60,
 b 0.75, t_on 19, t_off 23, lux_mult 1.4, min_change 1, demand_neutral 0,
 demand_rate 3.8, demand_exponent 0.35, lux_low 8000, solar_charge 0.2,
@@ -824,7 +830,11 @@ Consequences for this codebase (do not "fix" them away):
   `test run ccu3` 8/8); Bug 2 `rooms forget` tombstone + `rooms remember`
   (fw 1.1.111; live: forgotten room left the next pass -- no RPC, out of
   demand, null card readings -- remember restored it at weight 1.0,
-  rooms_weights autotest 4/4; shell round-trip verified). Host 259 green.
+  rooms_weights autotest 4/4; shell round-trip verified). Bug 1 honest
+  reboot echo: `config_schema.REBOOT_KEYS` (22 boot-latched keys, membership
+  frozen by host pin) + `(reboot required)` on `config set`/`reset` OK
+  replies (fw 1.1.112; live: `t_on` clean, `net_port`/`transport` marked,
+  values untouched). Host 267 green.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

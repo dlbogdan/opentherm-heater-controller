@@ -67,5 +67,43 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(KEY_SECTION[key], section, key)
 
 
+class RebootKeysTests(unittest.TestCase):
+    """Bug 1: keys read once at boot/construction must be declared so the
+    shell can mark their replies ``(reboot required)``. The membership is
+    FROZEN here -- adding/removing a latched key must be a deliberate,
+    reviewed edit to config_schema.REBOOT_KEYS."""
+
+    FROZEN = frozenset((
+        "control_tick_s", "cs_reassert_s",
+        "transport", "otgw_baud", "otgw_tx_pin", "otgw_rx_pin",
+        "otgw_ack_timeout_s",
+        "room_source", "rooms_poll_s", "rooms_rediscovery_s",
+        "demand_enabled", "t_out_source", "lux_source",
+        "ccu3_url", "ccu3_user", "ccu3_pass",
+        "net_enabled", "net_port", "net_ip", "net_mask", "net_gw", "net_dns",
+    ))
+
+    def test_membership_is_the_frozen_set(self):
+        from config_schema import REBOOT_KEYS
+        self.assertEqual(frozenset(REBOOT_KEYS), self.FROZEN)
+
+    def test_no_duplicates_and_all_are_real_keys(self):
+        from config_schema import REBOOT_KEYS
+        self.assertEqual(len(REBOOT_KEYS), len(set(REBOOT_KEYS)))
+        for key in REBOOT_KEYS:
+            self.assertIn(key, DEFAULTS, key)
+
+    def test_live_keys_are_not_marked(self):
+        # The calibration cluster (AGENTS.md) must stay unmarked: it is
+        # re-read by the control tick / CCU3 poll on every use.
+        from config_schema import REBOOT_KEYS
+        for key in ("t_on", "t_off", "curve_base", "flow_design", "b",
+                    "flow_min", "flow_min_on", "manual_setpoint",
+                    "min_change", "demand_rate", "demand_neutral",
+                    "lux_mult", "sensor_cache_s", "ccu3_poll_s",
+                    "demand_delta_cap", "off_sentinel"):
+            self.assertNotIn(key, REBOOT_KEYS, key)
+
+
 if __name__ == "__main__":
     unittest.main()

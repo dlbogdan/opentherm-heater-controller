@@ -199,3 +199,37 @@ for _section, _pairs in SECTION_SPECS:
     SECTION_KEYS[_section] = tuple(_key_order)
     SECTION_ORDER.append(_section)
 SECTION_ORDER = tuple(SECTION_ORDER)
+
+# Keys whose value is read ONCE at boot/construction, so a shell write
+# persists but only LANDS on the next boot. The ``config set``/``config
+# reset`` shell replies mark these "(reboot required)" so an OK never
+# implies a live effect (Bug 1, 2026-10-10). Every OTHER key is re-read
+# where it acts (the control tick's config.all(), the CCU3 poll, the shell
+# listings) and takes effect on the next tick. Membership is pinned by
+# tests/test_config_schema.py -- a new latched key must be a deliberate
+# edit here.
+REBOOT_KEYS = (
+    "control_tick_s",       # control task interval (main.py, at boot)
+    "cs_reassert_s",        # transport ctor + re-assert task interval
+    "transport",            # driver chosen by transport.factory at boot
+    "otgw_baud",            # UART built once
+    "otgw_tx_pin",
+    "otgw_rx_pin",
+    "otgw_ack_timeout_s",
+    "room_source",          # HeatingGroups mode at construction
+    "rooms_poll_s",         # rooms task interval
+    "rooms_rediscovery_s",  # HeatingGroups ctor
+    "demand_enabled",       # controller.has_demand_sensor at boot
+    "t_out_source",         # sensor source chosen by make_sensor_source at boot
+    "lux_source",           # source selection is boot-latched by design;
+                            # NOTE: currently read by NO code (inert key)
+    "ccu3_url",             # captured by the Ccu3Rpc ctors at boot
+    "ccu3_user",
+    "ccu3_pass",
+    "net_enabled",          # shell service started once
+    "net_port",
+    "net_ip",               # static IP applied before wifi.up()
+    "net_mask",
+    "net_gw",
+    "net_dns",
+)
