@@ -1,7 +1,9 @@
 # Bug 3 — CCU3 session-expiry check ignores the documented `code == -1`
 
 > Source: full-project review 2026-10-10. Severity: **low** (works in
-> practice; deviates from the pinned contract). Status: PLANNED.
+> practice; deviates from the pinned contract). Status: **DONE 2026-10-10**
+> — `Ccu3Error.code` honored, fw 1.1.108, live verified (`test run ccu3`
+> 8/8; `Exception.__init__` device episode pinned in the gotchas catalog).
 > Suggested order: first (tiny, host-only logic + one autotest case).
 
 ## Problem

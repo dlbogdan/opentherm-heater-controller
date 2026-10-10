@@ -157,6 +157,12 @@ readings (`weight`, `sensors_alive`, `setpoint`, `actual`,
 design -- its `set` error names the `SENSORS_CONFIG.*` key that actually
 changes the behavior.
 
+**Trust model:** the shell is unauthenticated on the LAN and fully
+privileged (including `repl`) -- whoever can reach port 23 owns the device;
+secret masking in `config` output is display courtesy, not a security
+control. Keep the board on a trusted LAN/VLAN and never forward port 23
+(the full decision record is in `AGENTS.md`, "Shell trust model").
+
 ## Config over the air
 
 The app config (`/app-config.json`) is grouped into six semantic sections

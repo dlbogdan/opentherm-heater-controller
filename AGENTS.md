@@ -401,6 +401,25 @@ unchanged) but lives in `micropy-system`: the board's `/lib/coresys` only
 refreshes at provisioning or a USB `autotest.py push`, so a network OTA
 does NOT update the `test` grammar.
 
+**Shell trust model (decision record, 2026-10-10):** the remote shell
+(framework `telnet_service`, port 23) is UNAUTHENTICATED on the LAN and
+fully privileged -- it is the device's trust boundary: whoever can reach
+port 23 owns the board (`config set` rewrites any config, `reboot` reboots,
+the framework `repl` command is a raw MicroPython prompt with the whole
+filesystem, including `/app-config.json` in cleartext). Accepted risks
+(owner decision, same posture as the CCU3's no-TLS trusted-LAN recipe):
+plaintext telnet, cleartext credentials on flash, unauthenticated
+set/reboot/repl. The `config` secret masking (`_SECRET_SUFFIXES`) is a
+DISPLAY COURTESY -- it keeps credentials out of casual output, logs and
+screenshots -- and is NOT a security control; `repl` reads them directly.
+DELIBERATELY REJECTED mitigations: fake shell auth over plaintext telnet (a
+token on the wire is no auth, only false confidence) and encrypting
+`/app-config.json` (flash is not a confidentiality boundary; USB reads it
+regardless). Operational mitigation that IS real: network placement -- the
+board lives on a trusted LAN/VLAN and port 23 is never forwarded. The
+optional `repl_enabled` kill-switch is FRAMEWORK-owned (filed in
+`micropy-system/PLAN.md`), not an app feature.
+
 **Auth (per RPC session):**
 1. `Session.login` with `{"username": ..., "password": ...}` -> returns a session id.
 2. Every subsequent call carries `"_session_id_": <id>` inside `params`.
@@ -839,7 +858,13 @@ Consequences for this codebase (do not "fix" them away):
   reboot echo: `config_schema.REBOOT_KEYS` (22 boot-latched keys, membership
   frozen by host pin) + `(reboot required)` on `config set`/`reset` OK
   replies (fw 1.1.112; live: `t_on` clean, `net_port`/`transport` marked,
-  values untouched). Host 267 green.
+  values untouched). Bug 4A golden OTGW wire-format pins (`gateway.asm`
+  facts verbatim: no-space status lines, `CMD: value` acks, bare error
+  tokens, space-variant-IGNORED tripwire) + WDT pre-check (steady state has
+  NO armed watchdog -- ack spin provably safe; gotchas §6); host-only, 13
+  new pins. Bug 5 trust-model decision record (AGENTS.md "Shell trust
+  model" + README pointer; `repl_enabled` filed framework-side `2d28b4e`).
+  Host 280 green.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),

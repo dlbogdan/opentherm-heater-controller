@@ -1,7 +1,9 @@
 # Bug 1 — Boot-latched config keys silently accept shell writes
 
 > Source: full-project review 2026-10-10. Severity: **medium** (behavior/doc
-> gap — the most likely owner footgun). Status: PLANNED.
+> gap — the most likely owner footgun). Status: **DONE 2026-10-10** —
+> `REBOOT_KEYS` (22 keys) + `(reboot required)` echo, fw 1.1.112, live
+> verified.
 > Suggested order: third (after Bug 3, Bug 2), one deploy.
 
 ## Problem

@@ -2,7 +2,9 @@
 
 > Source: full-project review 2026-10-10. Severity: **informational**
 > (accepted trusted-LAN design — but the acceptance is nowhere explicit).
-> Status: PLANNED — decision record + one optional cheap switch.
+> Status: **DONE 2026-10-10** — decision record in AGENTS.md ("Shell trust
+> model") + README pointer; `repl_enabled` filed in `micropy-system/PLAN.md`
+> Deferred Work (framework commit `2d28b4e`). No code change (by design).
 
 ## Problem
 

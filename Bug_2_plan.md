@@ -1,7 +1,9 @@
 # Bug 2 — `rooms forget` on a still-present room is a no-op that resurrects
 
 > Source: full-project review 2026-10-10. Severity: **low/medium** (wrong
-> semantics, silently reversed). Status: PLANNED.
+> semantics, silently reversed). Status: **DONE 2026-10-10** — tombstone +
+> `rooms remember`, fw 1.1.111, live verified (autotest 4/4 + shell
+> round-trip).
 > Suggested order: second (one deploy, pairs naturally with Bug 1).
 
 ## Problem
