@@ -3,8 +3,9 @@
 > Source: full-project review 2026-10-10. Severity: **low by design, high
 > as a validation risk** — `OTGWTransportDrv` (`app/transport/otgw.py`) has
 > never touched a real gateway (bench has none wired; shipped default stays
-> `otgw_dummy`). Status: PLANNED — phase A now (host), phase B when the
-> gateway lands.
+> `otgw_dummy`). Status: **Phase A DONE 2026-10-10** (`tests/
+> test_otgw_wire_format.py` 13 golden-line pins + WDT pre-check recorded in
+> MICROPYTHON-GOTCHAS §6); Phase B awaits the physical gateway.
 
 ## Problem
 

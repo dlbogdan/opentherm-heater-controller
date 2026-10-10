@@ -337,6 +337,21 @@ re-verify before trusting them elsewhere.
 - A reboot runs the boot-time OTA check first — the shell may be unavailable
   for several seconds. Retry before concluding WiFi failed.
 
+### The hardware WDT exists ONLY during candidate supervision
+- `micropy-system/src/slot_main.py` arms `machine.WDT(timeout=8000)` (feed
+  task every 1 s) ONLY when booting a CANDIDATE slot; after confirmation the
+  feed loop reboots once "without watchdog" (`watchdog.py`), so a board
+  running its ACTIVE slot has NO armed WDT.
+- Consequence (Bug 4 pre-check, 2026-10-10): the OTGW driver's bounded
+  synchronous ack wait (≤2 s per command, ≤3 commands before FAULT backoff)
+  is **provably WDT-safe** — in steady state there is no watchdog to miss,
+  and during candidate supervision the app HOLDS actuation, so no transport
+  writes reach the wire. The real cost of the spin is event-loop starvation
+  (shell/heartbeat/rooms delayed up to ~6 s on a dead link) — quantifying
+  that heartbeat gap is a Phase B live-validation item, not a WDT risk.
+- Do not "add a WDT feed" inside the driver: the framework owns watchdog
+  feeding exclusively (AGENTS.md: the app must not own or feed the watchdog).
+
 ---
 
 ## 7. Host-tooling quirks
