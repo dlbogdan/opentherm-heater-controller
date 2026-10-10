@@ -7,6 +7,35 @@
 > test_otgw_wire_format.py` 13 golden-line pins + WDT pre-check recorded in
 > MICROPYTHON-GOTCHAS §6); Phase B awaits the physical gateway.
 
+## Gateway identified + live stream probe (2026-10-10, no wiring needed)
+
+The house gateway (10.9.30.52) was identified and its raw stream captured
+read-only over the network -- most Phase B format risks retired in advance:
+
+- **Hardware**: ESP32 hat running rvdbreemen OTGW-firmware **0.10.3** on a
+  PIC gateway, **PIC firmware 6.6** (pic16f1847, type "gateway") -- the
+  EXACT family Phase A's golden lines were extracted from.
+- **Raw stream = TCP 25238** (the rvdbreemen "net2ser" port; 12700 is the
+  older otgw.tclcode firmware's port and is refused here). Second clients
+  connect freely: `python3 otgw-stream-capture.py 10.9.30.52 25238`.
+- **Format CONFIRMED on real hardware**: every frame line is direction
+  char + 8 hex digits, NO space. Standalone gateway mode verified
+  (`thermostatconnected=false`, `gatewaymode=true`); MsgID 1 write_data
+  arrives as an **R** line every ~2 s -- the driver's read-back accepts
+  T/R, so the drift check works against this gateway.
+- **Extra line types observed** (all harmlessly ignored by the parser):
+  `PR: <k>=<v>` priority-message reports (~10 s), `PS: 0/1`, `SC:` clock
+  sync, and the `PS: 1` CSV status dump.
+- **This gateway's poll set**: 0, 1, 14, 17, 18, 25, 26, 27, 56, 57 --
+  **28 (return temp) and 5 (fault flags) are NEVER polled**, so
+  `read_return_temp()` stays None on this boiler. Phase B step 5's
+  expectation adjusts accordingly.
+- **No CS=/CH= writers while idle**: the HA blueprint deliberately stops
+  sending when it is warm (owner-confirmed), leaving the gateway at its
+  idle CS=0. A capture with no command lines is NORMAL in warm weather --
+  schedule the CS-change/expiry windows for a cold spell (or a forced
+  heating test).
+
 ## Problem
 
 1. **Busy-spin ack wait.** `_await_ack` (`otgw.py:195-204`) pumps the UART

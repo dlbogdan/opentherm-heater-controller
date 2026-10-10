@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """OTGW stream capture: read-only debug mirror of the gateway's serial stream.
 
-The OTGW network firmware (otgw.tclcode.com) mirrors its entire serial stream on
-TCP port 12700: every command any client sends (CS=.., CH=..), every ack
-(CS: ..), and every OpenTherm frame (T/B/R/A + 8 hex digits). Connecting a
-second read-only client is safe -- the gateway supports several simultaneous
-connections (HA's opentherm_gw integration holds one). This is the host-side
-diagnostic for validating the board's OTGW driver against a real gateway: it
-shows exactly what the Pico writes and what the gateway acks.
+The gateway's network firmware mirrors its entire serial stream on a TCP
+"net2serial" port: every command any client sends (CS=.., CH=..), every ack
+(CS: ..), and every OpenTherm frame (direction char + 8 hex digits).
+PORT DEPENDS ON THE NETWORK FIRMWARE (verified live 2026-10-10 on the house
+gateway 10.9.30.52, rvdbreemen OTGW-firmware 0.10.3 + PIC 6.6):
+  * rvdbreemen ESP firmware (this house): net2ser port **25238**
+  * older otgw.tclcode.com network firmware: port 12700
+Connecting a second read-only client is safe -- the mirror supports several
+simultaneous connections. This is the host-side diagnostic for validating
+the board's OTGW driver against a real gateway: it shows exactly what the
+Pico writes and what the gateway acks.
 
 Usage:
     python3 otgw-stream-capture.py <otgw-host> [port] [--out FILE]
+    python3 otgw-stream-capture.py 10.9.30.52 25238 --out otgw-capture.log
 
 Output: one line per gateway line, prefixed with wall-clock time:
     2026-10-05 21:14:03.412  CS=42.0
@@ -37,7 +42,10 @@ def main():
         print(__doc__)
         return 1
     host = sys.argv[1]
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 12700
+    # argv[2] is the port ONLY if it is one: `--out FILE` may come first.
+    port = (int(sys.argv[2])
+            if len(sys.argv) > 2 and not sys.argv[2].startswith("-")
+            else 12700)
     out_path = None
     if "--out" in sys.argv:
         out_path = sys.argv[sys.argv.index("--out") + 1]

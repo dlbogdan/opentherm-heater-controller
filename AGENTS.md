@@ -684,6 +684,16 @@ Consequences for this codebase (do not "fix" them away):
   (`otgw_baud`). CS=0 makes the gateway fall back to its internal default CS
   of 10 degC **with CHenable cleared** -- so a sub-8 hold reports the held
   intent, not the gateway's internal default.
+- **The house gateway is identified (2026-10-10, live capture):** 10.9.30.52
+  = ESP32 hat (rvdbreemen OTGW-firmware 0.10.3) + **PIC firmware 6.6** --
+  the exact family `tests/test_otgw_wire_format.py` pins. Raw serial stream
+  mirrors on TCP **25238** (rvdbreemen net2ser; 12700 is refused -- that is
+  the older firmware's port). Verified on the wire: no-space status lines,
+  standalone gateway mode, MsgID 1 as R lines; `PR:`/`PS:`/`SC:`/CSV event
+  lines appear and the driver ignores them. This gateway never polls 28/5,
+  so `read_return_temp()` stays None here. No `CS=` lines while the HA
+  blueprint is idle (it deliberately stops when warm) -- normal, not a
+  fault.
 - Remaining: live validation once the gateway is wired (host contract:
   `tests/test_otgw_driver.py`; GOLDEN wire-format pins from `gateway.asm` —
   no-space status lines, `CMD: value` acks, bare error tokens — live in
