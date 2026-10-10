@@ -398,10 +398,11 @@ def register_config_commands(shell, config):
 # --------------------------------------------------------------------- heating groups
 
 ROOMS_USAGE = ("usage: rooms [<id|name> | all | stats | get <id|name>.<field>"
-               " | set <id|name>.<field> <value> | forget <id|name>]")
+               " | set <id|name>.<field> <value> | forget <id|name>"
+               " | remember <id|name>]")
 
-ROOM_FIELDS = ("room_id name kind weight sensors_alive last_seen_ms setpoint "
-               "actual demand_delta")
+ROOM_FIELDS = ("room_id name kind weight sensors_alive forgotten last_seen_ms"
+               " setpoint actual demand_delta")
 
 
 def _split_args(args):
@@ -431,7 +432,9 @@ def make_rooms_handler(groups):
 
     Resource grammar (mirrors ``config``): bare = the room names, ``all`` =
     every room card, ``<id|name>`` = one card, ``get/set <id|name>.<field>``
-    = one field (writable: weight), ``forget`` = manual prune. A room card
+    = one field (writable: weight), ``forget`` = tombstone (excluded from
+    demand + reconcile until ``remember``), ``remember`` = clear the
+    tombstone. A room card
     merges the durable registry (weight, liveness) with this pass's
     readings (setpoint, actual, demand_delta). Room names contain spaces,
     so refs join all tokens between the verb and the value; the LAST "."
@@ -459,6 +462,9 @@ def make_rooms_handler(groups):
         if head == "forget" and len(parts) >= 2:
             ok, message = groups.forget(" ".join(parts[1:]))
             return message if ok else "forget failed: " + message
+        if head == "remember" and len(parts) >= 2:
+            ok, message = groups.remember(" ".join(parts[1:]))
+            return message if ok else "remember failed: " + message
         if head in ("weight", "weights"):
             return ("unknown verb: %s (try: rooms set <id|name>.weight "
                     "<0..1>)" % head)
@@ -495,7 +501,7 @@ def register_rooms_commands(shell, groups):
         "rooms",
         make_rooms_handler(groups),
         "room cards (registry + readings); subcommands: all | stats | get/set "
-        "<id|name>.<field> | forget <id|name>",
+        "<id|name>.<field> | forget|remember <id|name>",
     )
 
 

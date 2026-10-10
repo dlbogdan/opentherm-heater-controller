@@ -58,6 +58,7 @@ class FakeCcu3:
             ("HmIP-RF", "E2", "ACTUAL_TEMPERATURE"): "22.0",
         }
         self.methods = []
+        self.value_requests = []  # addresses passed to Interface.getValue
 
     async def __call__(self, url, body):
         req = json.loads(body.decode())
@@ -84,6 +85,7 @@ class FakeCcu3:
         if method == "Interface.getValue":
             key = (params["interface"], params["address"][:-2],
                    params["valueKey"])
+            self.value_requests.append(params["address"][:-2])
             if key in self.values:
                 return ("HTTP/1.0 200 OK", {}, self._ok(rid, self.values[key]))
             return ("HTTP/1.0 200 OK", {}, self._err(rid, 1, "no key"))
@@ -359,12 +361,89 @@ class UnionModeTests(unittest.TestCase):
         self.assertFalse(byid["2"]["sensors_alive"])   # flagged gone
         self.assertAlmostEqual(byid["2"]["weight"], 0.4)  # tuning preserved
 
-    def test_forget_prunes_a_room(self):
+    def test_forget_tombstones_and_excludes_from_the_pass(self):
+        # Bug 2: forget is a TOMBSTONE, not a pop. The entry survives (with
+        # its weight), the room leaves the pass (no RPC, no demand, no
+        # readings), and reconcile can no longer resurrect or re-flag it.
         hg = self.make(FakeCcu3Union())
         run(hg.read())
-        ok, _ = hg.forget("Room Small")
+        hg.set_weight("2", 0.4)
+        ok, _msg = hg.forget("Room Small")
         self.assertTrue(ok)
-        self.assertNotIn("2", [e["room_id"] for e in hg.weights()])
+        byid = {e["room_id"]: e for e in hg.weights()}
+        self.assertIn("2", byid)                        # never deleted
+        self.assertTrue(byid["2"]["forgotten"])
+        self.assertAlmostEqual(byid["2"]["weight"], 0.4)  # tuning kept
+        fake2 = FakeCcu3Union()
+        hg._rpc._post = fake2
+        r = run(hg.read())
+        self.assertNotIn("E2", fake2.value_requests)    # zero RPC for it
+        self.assertNotIn("2", r["room_data"])           # no card readings
+        self.assertAlmostEqual(r["weighted_thermostats"], 2.0)  # 1 + 1
+        # demand over the remaining rooms only: (2 + 1) / 2 -> /3 cap
+        self.assertAlmostEqual(r["demand_pct"], (3.0 / 2.0 / 3.0) * 100.0)
+        card, err = hg.card("2")
+        self.assertIsNone(err)
+        self.assertTrue(card["forgotten"])
+        self.assertIsNone(card["setpoint"])
+
+    def test_forget_survives_rediscovery_without_warn(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        hg.forget("Room Small")
+        warned = []
+        os.remove(self.cache)  # force a re-discovery on the next read
+        hg2 = HeatingGroups(FakeConfig("heating_groups+etrvs"),
+                            cache_path=self.cache,
+                            registry_path=self.registry,
+                            http_post=FakeCcu3Union(),
+                            warn=lambda m: warned.append(m))
+        run(hg2.read())
+        byid = {e["room_id"]: e for e in hg2.weights()}
+        self.assertTrue(byid["2"]["forgotten"])     # not resurrected
+        self.assertTrue(byid["2"]["sensors_alive"])  # not flip-flagged
+        self.assertEqual(warned, [])                 # and never WARNed
+
+    def test_remember_restores_the_room_and_weight(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        hg.set_weight("2", 0.4)
+        hg.forget("2")
+        ok, msg = hg.remember("2")
+        self.assertTrue(ok)
+        self.assertIn("0.40", msg)  # weight preserved through the round-trip
+        r = run(hg.read())
+        self.assertIn("2", r["room_data"])
+        self.assertAlmostEqual(r["weighted_thermostats"], 2.4)
+
+    def test_forgotten_flag_round_trips_through_flash(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        hg.forget("Room Small")
+        hg2 = self.make(FakeCcu3Union())  # fresh instance, same registry file
+        byid = {e["room_id"]: e for e in hg2.weights()}
+        self.assertTrue(byid["2"]["forgotten"])
+
+    def test_weight_zero_mutes_but_keeps_readings(self):
+        # The documented difference: weight 0 mutes a room from demand but
+        # keeps it in the pass (visible card); forget removes it entirely.
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        hg.set_weight("2", 0.0)
+        r = run(hg.read())
+        self.assertIn("2", r["room_data"])
+        self.assertAlmostEqual(r["weighted_thermostats"], 2.0)
+        self.assertAlmostEqual(r["demand_pct"], (3.0 / 2.0 / 3.0) * 100.0)
+
+    def test_forget_unknown_room_rejected(self):
+        hg = self.make(FakeCcu3Union())
+        run(hg.read())
+        ok, msg = hg.forget("nope")
+        self.assertFalse(ok)
+        self.assertIn("no such room", msg)
+        ok, msg = hg.remember("nope")
+        self.assertFalse(ok)
+        self.assertIn("no such room", msg)
 
     def test_weight_out_of_domain_rejected(self):
         hg = self.make(FakeCcu3Union())

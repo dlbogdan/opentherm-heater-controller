@@ -2,9 +2,9 @@
 
 Resource grammar (mirrors ``config``): bare = room names, ``all`` = every
 card, ``<id|name>`` = one card, ``get/set <id|name>.<field>`` = one field
-(writable: weight), ``forget`` = prune. A fake collector stands in for
-HeatingGroups so the handler logic (quote-aware refs, last-dot field
-split, error hints) runs on a host without any CCU3 I/O.
+(writable: weight), ``forget`` = tombstone, ``remember`` = clear it. A fake
+collector stands in for HeatingGroups so the handler logic (quote-aware refs,
+last-dot field split, error hints) runs on a host without any CCU3 I/O.
 """
 
 import json
@@ -22,13 +22,16 @@ class FakeGroups:
     def __init__(self):
         self.set_calls = []
         self.forget_calls = []
+        self.remember_calls = []
         self._agg = None
         self._cards = {
             "2": {"room_id": "2", "name": "Room Small", "kind": "etrv",
-                  "weight": 0.4, "sensors_alive": True, "last_seen_ms": 1,
+                  "weight": 0.4, "sensors_alive": True, "forgotten": False,
+                  "last_seen_ms": 1,
                   "setpoint": 21.0, "actual": 20.0, "demand_delta": 1.0},
             "7": {"room_id": "7", "name": "Room Large", "kind": "group",
-                  "weight": 1.0, "sensors_alive": False, "last_seen_ms": 2,
+                  "weight": 1.0, "sensors_alive": False, "forgotten": False,
+                  "last_seen_ms": 2,
                   "setpoint": None, "actual": None, "demand_delta": None},
         }
 
@@ -38,7 +41,7 @@ class FakeGroups:
     def weights(self):
         return [{"room_id": rid, "name": c["name"], "kind": c["kind"],
                  "weight": c["weight"], "sensors_alive": c["sensors_alive"],
-                 "last_seen_ms": c["last_seen_ms"]}
+                 "forgotten": c["forgotten"], "last_seen_ms": c["last_seen_ms"]}
                 for rid, c in self._cards.items()]
 
     def card(self, ref):
@@ -64,7 +67,14 @@ class FakeGroups:
         self.forget_calls.append(ref)
         if ref == "nope":
             return False, "no such room: nope"
-        return True, "removed Room Small (2) from the weights registry"
+        return True, ("forgotten Room Small (2); excluded from demand and "
+                      "discovery until 'rooms remember'")
+
+    def remember(self, ref):
+        self.remember_calls.append(ref)
+        if ref == "nope":
+            return False, "no such room: nope"
+        return True, "remembered Room Small (2); back in the room pass at weight 0.40"
 
 
 class RoomsShellTests(unittest.TestCase):
@@ -153,13 +163,27 @@ class RoomsShellTests(unittest.TestCase):
         self.assertTrue(out.startswith("unknown verb: weight"))
         self.assertIn("rooms set <id|name>.weight", out)
 
-    def test_forget_prunes(self):
+    def test_forget_tombstones(self):
         out = self.handle("forget Room Small")
         self.assertEqual(self.groups.forget_calls, ["Room Small"])
-        self.assertIn("removed", out)
+        self.assertIn("forgotten", out)
 
     def test_forget_failure_is_prefixed(self):
         self.assertTrue(self.handle("forget nope").startswith("forget failed:"))
+
+    def test_remember_clears_the_tombstone(self):
+        out = self.handle("remember Room Small")
+        self.assertEqual(self.groups.remember_calls, ["Room Small"])
+        self.assertIn("remembered", out)
+
+    def test_remember_failure_is_prefixed(self):
+        self.assertTrue(self.handle("remember nope")
+                        .startswith("remember failed:"))
+
+    def test_forgotten_flag_visible_on_the_card(self):
+        self.groups._cards["2"]["forgotten"] = True
+        out = json.loads(self.handle("2"))
+        self.assertTrue(out["forgotten"])
 
     def test_unknown_room_is_not_usage_but_hint(self):
         self.assertEqual(self.handle("bogus"),

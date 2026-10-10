@@ -20,15 +20,20 @@ divergence from the script; the default weight of 1.0 keeps parity.
 **Per-room weights + liveness registry (P6a)** (``/room-weights-config.json``,
 separate from the disposable ``/ccu3_rooms_cache.json``): keyed by the stable
 CCU ``room_id`` (survives device replacement and renames), each entry holds
-``{name, kind, weight [0..1], sensors_alive, last_seen_ms}``. Discovery
-reconciles it -- new rooms are added (weight 1.0), known rooms keep their human
-weight, and vanished rooms are flagged ``sensors_alive=false`` but NEVER
-auto-deleted (a dead battery must not erase the tuning; the user prunes by hand
-with ``rooms forget``). A ``room_source`` change re-runs discovery and flags the
-rooms the new source excludes the same way -- their weights survive a switch
-back. Demand is a weighted mean over the rooms present this pass (weight 1
-everywhere == the old behaviour; weight 0 mutes a room). A transient read
-failure skips a room for one tick without touching its flag.
+``{name, kind, weight [0..1], sensors_alive, last_seen_ms, forgotten}``.
+Discovery reconciles it -- new rooms are added (weight 1.0), known rooms keep
+their human weight, and vanished rooms are flagged ``sensors_alive=false``
+but NEVER auto-deleted (a dead battery must not erase the tuning).
+``rooms forget`` TOMBSTONES an entry (``forgotten: true``, Bug 2): the room is
+excluded from every pass (no RPC, out of demand, no card readings) and from
+reconcile (no re-add, no liveness flip, no WARN) until ``rooms remember``
+clears the flag -- the weight survives the whole round-trip. Mute-but-visible
+stays ``weight 0``. A ``room_source`` change (applied at boot) re-runs
+discovery and flags the rooms the new source excludes the same way -- their
+weights survive a switch back. Demand is a weighted mean over the rooms
+present this pass (weight 1 everywhere == the old behaviour; weight 0 mutes a
+room). A transient read failure skips a room for one tick without touching
+its flag.
 
 **Room names come from the CCU3's own Room API** (``Room.listAll`` /
 ``Room.get``, matched by numeric channel id) -- they are *never* parsed from a
@@ -183,6 +188,10 @@ class HeatingGroups:
         wdelta = 0.0  # P6a: weight-scaled sum of demanding deltas
         room_data = {}  # room_id -> {"sp", "act"} for the shell room cards
         for room in rooms:
+            if self._is_forgotten(room.get("room_id")):
+                # Bug 2 tombstone: a forgotten room gets NO rpc, stays out
+                # of demand, and has no card readings until `rooms remember`.
+                continue
             sp, act = await self._room_values(room)
             if room.get("room_id") is not None:
                 room_data[str(room["room_id"])] = {"sp": sp, "act": act}
@@ -491,14 +500,19 @@ class HeatingGroups:
             if room.get("room_id") is None:  # defensive: unkeyable entry
                 continue
             rid = str(room.get("room_id"))
+            entry = self._registry.get(rid)
+            if entry is not None and entry.get("forgotten"):
+                # Bug 2 tombstone: human-pruned. No re-add, no liveness
+                # flip, no WARN -- forget survives re-discovery.
+                continue
             seen.add(rid)
             name = room.get("room_name", "")
             kind = room.get("kind", "")
-            entry = self._registry.get(rid)
             if entry is None:
                 self._registry[rid] = {"name": name, "kind": kind,
                                        "weight": 1.0, "sensors_alive": True,
-                                       "last_seen_ms": now}
+                                       "last_seen_ms": now,
+                                       "forgotten": False}
                 changed = True
                 continue
             entry["last_seen_ms"] = now
@@ -513,7 +527,8 @@ class HeatingGroups:
                     self._log("Rooms: room %s (%s) back in the room source"
                               % (name, rid))
         for rid, entry in self._registry.items():
-            if rid not in seen and entry.get("sensors_alive"):
+            if (rid not in seen and entry.get("sensors_alive")
+                    and not entry.get("forgotten")):
                 entry["sensors_alive"] = False
                 changed = True
                 if self._warn:
@@ -549,6 +564,7 @@ class HeatingGroups:
                         "kind": entry.get("kind", ""),
                         "weight": float(entry.get("weight", 1.0)),
                         "sensors_alive": bool(entry.get("sensors_alive", False)),
+                        "forgotten": bool(entry.get("forgotten", False)),
                         "last_seen_ms": entry.get("last_seen_ms")})
         return out
 
@@ -577,6 +593,7 @@ class HeatingGroups:
                 "kind": entry.get("kind", ""),
                 "weight": float(entry.get("weight", 1.0)),
                 "sensors_alive": bool(entry.get("sensors_alive", False)),
+                "forgotten": bool(entry.get("forgotten", False)),
                 "last_seen_ms": entry.get("last_seen_ms"),
                 "setpoint": sp, "actual": act,
                 "demand_delta": (sp - act) if (sp is not None
@@ -612,9 +629,41 @@ class HeatingGroups:
             self._registry[rid].get("name", ""), rid, value)
 
     def forget(self, ref):
+        """Tombstone a room (Bug 2): excluded from every pass (no RPC, out
+        of demand, no card readings) AND from discovery reconcile (no
+        re-add, no liveness flip, no WARN) until ``remember``. The entry --
+        name, kind, weight -- survives in the registry (forgetting must
+        never destroy the tuning)."""
         rid, err = self._resolve_room(ref)
         if err:
             return False, err
-        name = self._registry.pop(rid, {}).get("name", rid)
+        entry = self._registry[rid]
+        name = entry.get("name", rid)
+        if entry.get("forgotten"):
+            return True, "%s (%s) already forgotten" % (name, rid)
+        entry["forgotten"] = True
         self._save_registry()
-        return True, "removed %s (%s) from the weights registry" % (name, rid)
+        return True, ("forgotten %s (%s); excluded from demand and "
+                      "discovery until 'rooms remember'" % (name, rid))
+
+    def remember(self, ref):
+        """Clear a forget tombstone; the room is back in the next pass at
+        its preserved weight."""
+        rid, err = self._resolve_room(ref)
+        if err:
+            return False, err
+        entry = self._registry[rid]
+        name = entry.get("name", rid)
+        if not entry.get("forgotten"):
+            return True, "%s (%s) is not forgotten" % (name, rid)
+        entry["forgotten"] = False
+        self._save_registry()
+        return True, ("remembered %s (%s); back in the room pass at "
+                      "weight %.2f" % (name, rid, self._weight_for(rid)))
+
+    def _is_forgotten(self, room_id):
+        """True if the durable registry tombstones this room (Bug 2)."""
+        if room_id is None:
+            return False
+        entry = self._registry.get(str(room_id))
+        return bool(entry and entry.get("forgotten"))

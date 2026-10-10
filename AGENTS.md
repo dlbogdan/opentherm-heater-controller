@@ -527,12 +527,17 @@ eTRV rooms (Baie Copii, Baie Parinti, Birou, Casa Scarii) to the 7 groups.
 identical only at 1-WTH-1-group-per-room (true in this house); weights are a
 deliberate divergence, default 1.0 preserves parity. The durable registry
 `/room-weights-config.json` (separate from the disposable rooms cache) is keyed
-by CCU `room_id` with `{name, kind, weight 0..1, sensors_alive, last_seen_ms}`
-(uptime stamp). Discovery **reconciles** it: new rooms added at weight 1.0,
+by CCU `room_id` with `{name, kind, weight 0..1, sensors_alive, last_seen_ms,
+forgotten}` (uptime stamp). Discovery **reconciles** it: new rooms added at
+weight 1.0,
 human weights NEVER overwritten, vanished/mode-excluded rooms flagged
 `sensors_alive=false` and **never auto-deleted** (one edge-triggered WARN per
 transition; verified: a 0.5 weight survived reboots + re-discovery + a
-room_source round-trip). Manual prune only: `rooms forget`. Demand is a
+room_source round-trip). `rooms forget` is a TOMBSTONE (fw 1.1.111): the
+entry survives with `forgotten: true`, the room leaves every pass (no RPC,
+out of demand, no card readings) and reconcile (no re-add, no liveness flip,
+no WARN) until `rooms remember` clears the flag — the weight survives the
+whole round-trip; mute-but-visible stays weight 0. Demand is a
 weighted mean over rooms present in the pass (`weighted_thermostats` is the
 denominator; weight 0 mutes; a dead room is in neither sum). Liveness is
 **discovery presence** — a transient read failure just skips the room for that
@@ -813,6 +818,13 @@ Consequences for this codebase (do not "fix" them away):
   picks this up only at provisioning/USB push, not OTA. Live: card 1021
   with live readings, weight round-trip reverted to production 1.0,
   old-verb hint, rooms_weights autotest 3/3. Host 245 + framework 127 green.
+- Review-fix series (2026-10-10, plans `Bug_*_plan.md`): Bug 3 session-expiry
+  `code == -1` honored on `Ccu3Error` (fw 1.1.108; device episode:
+  `Exception.__init__` inaccessible on this build -- gotchas catalog; live
+  `test run ccu3` 8/8); Bug 2 `rooms forget` tombstone + `rooms remember`
+  (fw 1.1.111; live: forgotten room left the next pass -- no RPC, out of
+  demand, null card readings -- remember restored it at weight 1.0,
+  rooms_weights autotest 4/4; shell round-trip verified). Host 259 green.
 
 See `MICROPYTHON-GOTCHAS.md` for the canonical catalog of verified
 device-only pitfalls (read before writing firmware code),
