@@ -38,7 +38,20 @@ except ImportError:  # CPython host tests
 
 
 class Ccu3Error(Exception):
-    """Protocol-level CCU3 failure (transport or RPC error)."""
+    """Protocol-level CCU3 failure (transport or RPC error).
+
+    ``code`` carries the CCU3 JSON-RPC error code when the failure came from
+    an RPC error object (None otherwise). The pinned auth contract (AGENTS.md,
+    CCU3 section) defines session expiry as ``code == -1`` OR a message
+    substring, so the code must survive on the exception. ``str(exc)`` stays
+    message-only -- every log line keeps its exact shape.
+    """
+
+    def __init__(self, message, code=None):
+        super().__init__(message)  # NOT Exception.__init__: MicroPython
+                                   # raises AttributeError (verified live
+                                   # 1.1.107 -- see MICROPYTHON-GOTCHAS)
+        self.code = code
 
 
 def _now_ms():
@@ -175,8 +188,9 @@ class Ccu3Rpc:
         except (ValueError, AttributeError) as exc:
             raise Ccu3Error("invalid JSON response") from exc
         if response.get("error"):
-            raise Ccu3Error(str(response["error"].get(
-                "message", response["error"])))
+            error = response["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+            raise Ccu3Error(str(error.get("message", error)), code=code)
         return response.get("result")
 
     async def login(self):
@@ -207,6 +221,12 @@ class Ccu3Rpc:
 
 
 def _looks_like_session_error(exc):
+    # Pinned contract (AGENTS.md, CCU3 "Auth"): expiry is code == -1 OR a
+    # message substring. The code check catches a code-only -1 whose message
+    # matches none of the substrings; getattr covers every raise site that
+    # carries no code (http/JSON/transport errors).
+    if getattr(exc, "code", None) == -1:
+        return True
     message = str(exc).lower()
     return ("session" in message or "not logged in" in message
             or "access denied" in message or "nicht angemeldet" in message)

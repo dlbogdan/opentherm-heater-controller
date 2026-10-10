@@ -47,6 +47,20 @@ re-verify before trusting them elsewhere.
 - **Provenance:** live CCU3 client episode; passed every host test (the host
   suite injects a fake `http_post`, so the real client only runs on-device).
 
+### `Exception.__init__` is NOT accessible from a subclass
+- **Symptom:** `AttributeError: type object 'Exception' has no attribute
+  '__init__'` from `Exception.__init__(self, message)` inside a custom
+  exception's `__init__`.
+- **Reality:** CPython resolves the explicit unbound call fine; this build
+  does not expose `__init__` as an attribute of `Exception`. Host suite
+  passed, board failed (2026-10-10, firmware 1.1.107 autotest run — the
+  Bug 3 `Ccu3Error(message, code=...)` ctor).
+- **Fix:** `super().__init__(message)` (zero-arg `super()` works in
+  instance methods on this build); positional args still land in `args`
+  via `__new__`, so `str(exc)` stays message-only.
+- **Pinned by:** `autotests/test_ccu3_live.TestSessionErrorCodeContract`
+  (constructs the coded exception on-device).
+
 ### No `sys.stdout` attribute
 - **Reality:** this build has no assignable `sys.stdout`.
 - **Fix:** never capture output by reassigning it; use callbacks or an

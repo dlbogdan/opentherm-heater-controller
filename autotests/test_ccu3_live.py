@@ -122,6 +122,74 @@ class TestCcu3Rpc(unittest.TestCase):
         return float(raw)
 
 
+class TestSessionErrorCodeContract(unittest.TestCase):
+    """Bug 3: the pinned auth contract (AGENTS.md, CCU3 "Auth") is
+    ``code == -1`` OR a message substring. This runs a FRESH Ccu3Rpc over an
+    INJECTED fake post (no real RPC, no pooled-session cost) to prove the
+    on-device client re-logins on a code-only -1 expiry -- and does NOT on
+    any other code. Pure logic, no Wi-Fi needed."""
+
+    timeout_s = 20
+
+    class FakePost:
+        """Login always OK; getValue fails while the FIRST session id is
+        presented (message chosen to match NO expiry substring)."""
+
+        def __init__(self, code=-1, message="Zugriff nicht moeglich"):
+            self.code = code
+            self.message = message
+            self.logins = 0
+
+        async def __call__(self, url, body):
+            import json
+            request = json.loads(body.decode())
+            method = request["method"]
+            if method == "Session.login":
+                self.logins += 1
+                return self._resp(request["id"], "sid-%d" % self.logins)
+            if method == "Interface.getValue":
+                if request["params"].get("_session_id_") == "sid-1":
+                    return ("HTTP/1.0 200 OK", {}, json.dumps(
+                        {"result": None,
+                         "error": {"code": self.code,
+                                   "message": self.message},
+                         "id": request["id"]}).encode())
+                return self._resp(request["id"], {"value": "7.5"})
+            raise AssertionError("unexpected method " + method)
+
+        def _resp(self, rpc_id, result):
+            import json
+            return ("HTTP/1.0 200 OK", {}, json.dumps(
+                {"result": result, "error": None,
+                 "id": rpc_id}).encode())
+
+    def _rpc(self, post):
+        from ccu3 import Ccu3Rpc
+        return Ccu3Rpc("http://127.0.0.1:1/api/homematic.cgi", "u", "p",
+                       http_post=post)
+
+    async def test_code_only_expiry_relogins_and_retries(self):
+        post = self.FakePost(code=-1, message="Zugriff nicht moeglich")
+        result = await self._rpc(post).call(
+            "Interface.getValue", {"interface": "i", "address": "a:1",
+                                   "valueKey": "K"})
+        self.assertEqual(result, {"value": "7.5"})
+        self.assertEqual(post.logins, 2,
+                         "code -1 alone must trigger re-login + retry")
+
+    async def test_other_code_does_not_retry(self):
+        from ccu3 import Ccu3Error
+        post = self.FakePost(code=-2, message="totally unrelated")
+        try:
+            await self._rpc(post).call(
+                "Interface.getValue", {"interface": "i", "address": "a:1",
+                                       "valueKey": "K"})
+            self.fail("non-expiry error must raise")
+        except Ccu3Error:
+            pass
+        self.assertEqual(post.logins, 1, "a non-expiry error must NOT re-login")
+
+
 class TestWeatherSource(unittest.TestCase):
     """The production Ccu3SensorSource poll logic (cache + value sanity).
 

@@ -356,5 +356,89 @@ class DiscoveryBackoffTests(unittest.TestCase):
         self.assertIsNone(source._discovery_failed_ms)  # success clears it
 
 
+class SessionErrorCodeTests(unittest.TestCase):
+    """Bug 3: the pinned auth contract (AGENTS.md, CCU3 "Auth") is
+    ``code == -1`` OR a message substring. The code must survive on
+    Ccu3Error so a code-only expiry still re-logins + retries once."""
+
+    class FakePost:
+        """Login always OK; getValue fails while the FIRST session id is
+        presented (message chosen to match NO expiry substring), then OK."""
+
+        def __init__(self, code=-1, message="Zugriff nicht moeglich"):
+            self.code = code
+            self.message = message
+            self.methods = []
+            self.session = "sid-1"
+
+        async def __call__(self, url, body):
+            request = json.loads(body.decode())
+            method = request["method"]
+            self.methods.append(method)
+            if method == "Session.login":
+                self.session = "sid-%d" % len(self.methods)
+                return ("HTTP/1.0 200 OK", {},
+                        self._ok(request["id"], self.session))
+            if method == "Interface.getValue":
+                if request["params"].get("_session_id_") == "sid-1":
+                    return ("HTTP/1.0 200 OK", {},
+                            self._err(request["id"], self.code, self.message))
+                return ("HTTP/1.0 200 OK", {},
+                        self._ok(request["id"], {"value": "7.5"}))
+            raise AssertionError("unexpected method " + method)
+
+        @staticmethod
+        def _ok(rpc_id, result):
+            return json.dumps({"result": result, "error": None,
+                               "id": rpc_id}).encode()
+
+        @staticmethod
+        def _err(rpc_id, code, message):
+            return json.dumps({"result": None,
+                               "error": {"code": code, "message": message},
+                               "id": rpc_id}).encode()
+
+    def make_rpc(self, post):
+        from ccu3 import Ccu3Rpc
+        return Ccu3Rpc("http://127.0.0.1:1/api/homematic.cgi", "u", "p",
+                       http_post=post)
+
+    def test_code_minus_1_alone_relogins_and_retries(self):
+        post = self.FakePost(code=-1, message="Zugriff nicht moeglich")
+        result = run(self.make_rpc(post).call(
+            "Interface.getValue", {"interface": "i", "address": "a:1",
+                                   "valueKey": "K"}))
+        self.assertEqual(result, {"value": "7.5"})
+        self.assertEqual(post.methods.count("Session.login"), 2,
+                         "code -1 alone must trigger re-login + retry")
+
+    def test_other_code_with_plain_message_does_not_retry(self):
+        from ccu3 import Ccu3Error
+        post = self.FakePost(code=-2, message="totally unrelated")
+        with self.assertRaises(Ccu3Error):
+            run(self.make_rpc(post).call(
+                "Interface.getValue", {"interface": "i", "address": "a:1",
+                                       "valueKey": "K"}))
+        self.assertEqual(post.methods.count("Session.login"), 1,
+                         "a non-expiry error must NOT re-login")
+
+    def test_substring_path_still_works_with_other_code(self):
+        post = self.FakePost(code=-32700, message="Invalid session id")
+        result = run(self.make_rpc(post).call(
+            "Interface.getValue", {"interface": "i", "address": "a:1",
+                                   "valueKey": "K"}))
+        self.assertEqual(result, {"value": "7.5"})
+        self.assertEqual(post.methods.count("Session.login"), 2,
+                         "substring expiry keeps working (parity)")
+
+    def test_error_code_survives_and_str_stays_message_only(self):
+        from ccu3 import Ccu3Error
+        exc = Ccu3Error("boom", code=-32000)
+        self.assertEqual(str(exc), "boom")  # log-shape pin
+        self.assertEqual(exc.code, -32000)
+        plain = Ccu3Error("no code")
+        self.assertIsNone(plain.code)
+
+
 if __name__ == "__main__":
     unittest.main()
