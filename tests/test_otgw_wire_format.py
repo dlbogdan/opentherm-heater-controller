@@ -166,6 +166,15 @@ class WireFormatTests(unittest.TestCase):
         self.assertTrue(drv.set_heating(True))
         self.assertEqual(bytes(self.link.written), b"CH=1\r")
 
+    def test_two_decimal_ack_parses(self):
+        # The house gateway's overnight capture (2026-10-10/11) shows the
+        # PIC acking `CS: 39.00` -- TWO decimals, while the driver writes
+        # one (`CS=39.0`). The float() parse must accept both spellings.
+        drv = self.make(b"CS: 39.00\r\n")
+        self.assertTrue(drv.set_flow_target(39.0))
+        self.assertEqual(drv._wire_cs, 39.0)
+        self.assertIsNotNone(drv._last_assert_ms)
+
     def test_bare_error_token_fails_the_pending_command(self):
         for token in (b"NG\r\n", b"SE\r\n"):
             drv = self.make(token)

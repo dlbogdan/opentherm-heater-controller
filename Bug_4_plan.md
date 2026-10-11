@@ -36,6 +36,37 @@ read-only over the network -- most Phase B format risks retired in advance:
   schedule the CS-change/expiry windows for a cold spell (or a forced
   heating test).
 
+## Passive Phase B evidence -- first cold night (2026-10-10 08:43 -> 10-11 03:30)
+
+19 h capture (88 k lines) via net2ser while the HA blueprint drove the
+boiler. Findings, all now pinned or documented:
+
+- **HA's control path is REST -> ESP -> PIC serial**: 1252 `CS:` acks but
+  ZERO `CS=` command lines on the mirror -- the ESP injects its own
+  commands without echoing them to net2ser. The Pico writes DIRECTLY to
+  the PIC UART, sees its acks on its own RX, and its writes WILL appear
+  on the mirror (they're on the shared serial wire). No design impact.
+- **The blueprint re-asserts CS exactly every 30 s** (cadence visible to
+  ~50 ms) -- the HA side independently converged on the same 2x margin
+  the driver's `cs_reassert_s = 30` default chose. Parity confirmed.
+- **Ack format on the wire: `CS: 39.00`** -- TWO decimals (the driver
+  writes one). Pinned by `test_two_decimal_ack_parses`; the `float()`
+  parse already accepted it.
+- **Wire read-back lags the ack by 5-8 s** (`CS: 40.00` at 17:35:30 ->
+  R-line 40.0 at 17:35:38): the ESP/PIC apply the value on the next
+  MsgID-1 poll. Validates the ack-echo-is-authoritative + tick-based
+  drift-check design (30 s tick >> 8 s lag).
+- **Full heating night, zero rejections**: no NG/SE anywhere; CS 38-46,
+  flow 27.5-82.6, modulation 0-93 %, pressure 1.3-1.4 bar; MsgID-0 slave
+  `lb` bits (flame/CH/DHW) flip exactly when expected -- matches the
+  driver's status interpretation.
+- **Re-confirmed**: ids 28/5 never polled; id 27 always `data_invalid`.
+- **Capture tooling proven**: the 10 s recv-timeout self-heal recovered
+  two dead links unattended (16:56/16:57).
+- Still open for the wired Phase B: Pico-path ack LATENCY (the mirror
+  can't time ESP-injected commands), the self-expiry drill, the
+  dead-link drill, and `transport status` telemetry from the board.
+
 ## Problem
 
 1. **Busy-spin ack wait.** `_await_ack` (`otgw.py:195-204`) pumps the UART

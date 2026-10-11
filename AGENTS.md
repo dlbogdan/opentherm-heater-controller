@@ -694,6 +694,16 @@ Consequences for this codebase (do not "fix" them away):
   so `read_return_temp()` stays None here. No `CS=` lines while the HA
   blueprint is idle (it deliberately stops when warm) -- normal, not a
   fault.
+- **HA's control path + the 30 s rhythm (first cold night, 2026-10-10/11
+  passive capture, `otgw-log-digest.py`):** the blueprint commands via the
+  ESP's **REST API** (`/api/v1/otgw/command/...`) -- the net2ser mirror
+  shows the PIC's `CS: 39.00`-style acks (TWO decimals -- pinned by
+  `test_two_decimal_ack_parses`) but NOT the ESP-injected command lines.
+  The blueprint re-asserts CS **exactly every 30 s** (same 2x margin as
+  the driver's `cs_reassert_s`); the MsgID-1 wire read-back follows an
+  ack by 5-8 s; a full heating night produced zero NG/SE rejections.
+  The Pico's own UART writes/acks bypass the ESP entirely -- see
+  `Bug_4_plan.md` for the full evidence list.
 - Remaining: live validation once the gateway is wired (host contract:
   `tests/test_otgw_driver.py`; GOLDEN wire-format pins from `gateway.asm` —
   no-space status lines, `CMD: value` acks, bare error tokens — live in

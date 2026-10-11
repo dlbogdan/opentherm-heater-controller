@@ -12,7 +12,10 @@ only what matters for OTGW driver validation (Bug 4 Phase B):
   * TRANSITIONS only for the chatty signals: the wire control setpoint
     (MsgID 1 write_data), MsgID 0 status flags, gateway event lines and
     the PR: status banner (change-only -- the firmware re-dumps them
-    every ~10 min); connect/reconnect markers and commands always print;
+    every ~10 min); a plateau of identical acks (the 30 s re-assert
+    rhythm) collapses to ONE line with count + cadence; connect/reconnect
+    markers and commands always print; ESP status chatter (SC:/SR:/PS:/PR:)
+    collapses to one histogram bucket each;
   * telemetry min/max/last per folded data id.
 
 Output is a few hundred lines regardless of capture length -- safe to
@@ -40,9 +43,11 @@ NAMES = {0: "status", 1: "control_setpoint", 5: "fault_flags",
          28: "return_temp", 56: "dhw_setpoint", 57: "max_boiler_setpoint"}
 ERRORS = ("NG", "SE", "BV", "OR", "NS", "NF", "OE")
 TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d)  (.*)$")
+TS_FMT = "%Y-%m-%d %H:%M:%S.%f"
 FRAME_RE = re.compile(r"^([TRBA])([0-9A-Fa-f]{8})$")
 CMD_RE = re.compile(r"^([A-Z]{2})=(.*)$")
 ACK_RE = re.compile(r"^([A-Z]{2}): (.*)$")
+STATUS_RE = re.compile(r"^[A-Z][A-Z]: ")
 CAP = 200          # max lines per dumped section
 
 
@@ -74,6 +79,7 @@ def main():
     telemetry = {}        # id -> [min, max, last, count]
     latencies = []        # ms
     pending = {}          # cmd -> ts of the command line
+    ack_run = [None, []]  # [text, [ts...]] -- identical acks collapse
     first_ts = last_ts = None
     total = frames = 0
 
@@ -83,6 +89,23 @@ def main():
             return
         last_sig[key] = text
         events.append((ts, text))
+
+    def flush_ack_run():
+        """Collapse a plateau of identical acks (the 30 s re-assert rhythm
+        would otherwise blow the event cap): one line with count + cadence."""
+        text, stamps = ack_run
+        if text is None:
+            return
+        if len(stamps) > 2:
+            d0 = datetime.strptime(stamps[0], TS_FMT)
+            d1 = datetime.strptime(stamps[-1], TS_FMT)
+            step = (d1 - d0).total_seconds() / (len(stamps) - 1)
+            events.append((stamps[0], "%s  x%d every ~%.0fs (until %s)"
+                           % (text, len(stamps), step, stamps[-1][11:16])))
+        else:
+            for t in stamps:
+                events.append((t, text))
+        ack_run[0], ack_run[1] = None, []
 
     with open(path, errors="replace") as f:
         for line in f:
@@ -135,10 +158,15 @@ def main():
             if am and am.group(1) in ("CS", "CH"):
                 cmd, value = am.groups()
                 hist["ack %s:" % cmd] += 1
-                events.append((ts, "<<< %s: %s" % (cmd, value)))
+                text = "<<< %s: %s" % (cmd, value)
+                if ack_run[0] == text:
+                    ack_run[1].append(ts)
+                else:
+                    flush_ack_run()
+                    ack_run[0], ack_run[1] = text, [ts]
                 if cmd in pending:
-                    t0 = datetime.strptime(pending[cmd], "%Y-%m-%d %H:%M:%S.%f")
-                    t1 = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
+                    t0 = datetime.strptime(pending[cmd], TS_FMT)
+                    t1 = datetime.strptime(ts, TS_FMT)
                     latencies.append(((t1 - t0).total_seconds() * 1000.0))
                 continue
             if body in ERRORS:
@@ -160,7 +188,15 @@ def main():
                 hist["event line"] += 1
                 signal(ts, "evt:" + body, "evt " + body)
                 continue
-            hist["other: " + body.split("=")[0][:16]] += 1
+            sm = STATUS_RE.match(body)
+            # collapse the ESP's periodic status chatter (SC:/SR:/PS:/PR: ...)
+            # into ONE bucket each -- per-minute SC: lines otherwise spawn
+            # a thousand one-hit histogram entries
+            hist["other: " + (sm.group(0)[:3] if sm
+                               else body.split("=")[0][:16])] += 1
+
+    flush_ack_run()
+    events.sort(key=lambda e: e[0])   # run summaries land at run START
 
     print("== otgw-log-digest %s ==" % path)
     print("lines %d  frames %d  span %s .. %s" % (total, frames, first_ts,
