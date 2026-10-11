@@ -57,7 +57,9 @@ boiler. Findings, all now pinned or documented:
   MsgID-1 poll. Validates the ack-echo-is-authoritative + tick-based
   drift-check design (30 s tick >> 8 s lag).
 - **Full heating night, zero rejections**: no NG/SE anywhere; CS 38-46,
-  flow 27.5-82.6, modulation 0-93 %, pressure 1.3-1.4 bar; MsgID-0 slave
+  flow 27.5-82.6 (the 82.6 peak = DHW-barrel reheat, owner-confirmed
+  normal -- see AGENTS.md "Flow-temp spikes"), modulation 0-93 %,
+  pressure 1.3-1.4 bar; MsgID-0 slave
   `lb` bits (flame/CH/DHW) flip exactly when expected -- matches the
   driver's status interpretation.
 - **Re-confirmed**: ids 28/5 never polled; id 27 always `data_invalid`

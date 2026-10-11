@@ -704,6 +704,14 @@ Consequences for this codebase (do not "fix" them away):
   ack by 5-8 s; a full heating night produced zero NG/SE rejections.
   The Pico's own UART writes/acks bypass the ESP entirely -- see
   `Bug_4_plan.md` for the full evidence list.
+- **Flow-temp spikes are DHW, not a fault (owner-confirmed 2026-10-11):**
+  the boiler's DHW-priority reheat of the hot-water barrel drives flow
+  temp transiently to ~83 degC -- ABOVE its own reported max-boiler-
+  setpoint (75) and far above the heating CS. Normal; the board's
+  `read_flow_temp()` (dp 25) will show the same spikes whenever DHW
+  takes priority. Never treat a flow >> CS excursion as a heating-loop
+  fault (telemetry-only today; the control loop does not consume
+  flow_temp).
 - Remaining: live validation once the gateway is wired (host contract:
   `tests/test_otgw_driver.py`; GOLDEN wire-format pins from `gateway.asm` —
   no-space status lines, `CMD: value` acks, bare error tokens — live in
