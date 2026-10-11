@@ -60,9 +60,24 @@ boiler. Findings, all now pinned or documented:
   flow 27.5-82.6, modulation 0-93 %, pressure 1.3-1.4 bar; MsgID-0 slave
   `lb` bits (flame/CH/DHW) flip exactly when expected -- matches the
   driver's status interpretation.
-- **Re-confirmed**: ids 28/5 never polled; id 27 always `data_invalid`.
+- **Re-confirmed**: ids 28/5 never polled; id 27 always `data_invalid`
+  (the blueprint never feeds `OT=`).
+- **Full-night arc (re-digested with plateau collapsing)**: blueprint
+  started 17:20 (CS 39), climbed the curve through the night
+  39->40->38->39->42->43->42->43->44->45->46->45 as it got colder,
+  still heating at capture end (03:30). CH-enable stayed on 17:20 ->
+  03:30; the burner cycled (slave `lb` bit1) every ~10-20 min; the
+  fault bit NEVER set; zero NG/SE/BV rejections.
+- **Cadence never exceeded ~30 s** (plateau averages 26-30 s -- the
+  blueprint sometimes runs FASTER than its 30 s timer, never slower):
+  the vigilance window (60 s) had 2x+ margin all night from the HA side.
+- **Wire read-back lag after each CS change: 2-6 s** (ack :30.2 -> R
+  line :32-36) -- even better than the first sample's 5-8 s.
+- **No expiry window observed** (the blueprint never paused while
+  heating) -- the self-expiry drill still needs the bench or a
+  deliberate blueprint pause.
 - **Capture tooling proven**: the 10 s recv-timeout self-heal recovered
-  two dead links unattended (16:56/16:57).
+  two dead links unattended (16:56/16:57); then 10.5 h stable.
 - Still open for the wired Phase B: Pico-path ack LATENCY (the mirror
   can't time ESP-injected commands), the self-expiry drill, the
   dead-link drill, and `transport status` telemetry from the board.
