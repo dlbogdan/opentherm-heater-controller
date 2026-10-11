@@ -17,3 +17,7 @@ app-config.json
 .micropy-device-ip
 .cache/
 *.code-workspace
+
+# OTGW passive-capture output (raw stream logs; keep the digest in chat, not git)
+otgw-capture.log
+otgw-digest.txt
