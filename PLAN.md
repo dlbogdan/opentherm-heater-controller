@@ -462,4 +462,5 @@ this up only at provisioning/USB push, not via OTA.
 - **Demand P-offset research** — owner-flagged design improvement
   (architecture §14); validate against real boiler response, do not re-tune
   blind.
-- Direct-OT master driver, HA MQTT entity (arch §12), OLED UI.
+- Direct-OT master driver, HA MQTT entity (arch §12), OLED UI (perfboard
+  prototype drafted 2026-10-09: `oled-ui-perfboard-prototype.md`).

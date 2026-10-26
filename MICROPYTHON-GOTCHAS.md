@@ -352,6 +352,19 @@ re-verify before trusting them elsewhere.
 - Do not "add a WDT feed" inside the driver: the framework owns watchdog
   feeding exclusively (AGENTS.md: the app must not own or feed the watchdog).
 
+### RP2350 renumbered DMA request signals (DREQ) vs RP2040
+- Verified 2026-10-11 against pico-sdk `rp2350/regs/dreq.h` + the RP2350
+  datasheet (bench confirmation lands with OLED P1): `rp2.DMA`'s
+  `treq_sel` numbers are NOT the RP2040 numbers. SPI0 TX = **24** (RP2040:
+  16), SPI0 RX = 25, SPI1 TX = 26; PIO0 TX0-3 = 0-3, PIO1 TX0-3 = 8-11,
+  PIO2 TX0-3 = 16-19 (RX at +4). The MicroPython docs' `(pio<<3)+sm`
+  formula matches the datasheet for TX FIFOs.
+- Failure mode is a silent hang, not an error: a wrong `treq_sel` (e.g.
+  RP2040-era `1`) selects another peripheral's request (RP2350 DREQ 1 =
+  PIO0_TX1), the channel never triggers, and `while dma.active()` spins
+  forever. Any DMA wait loop must carry a `ticks_diff` bail-out.
+- Same trap bit tinygo's RP2 SPI driver (their fix pins 16 vs 24 per chip).
+
 ---
 
 ## 7. Host-tooling quirks
