@@ -1,3 +1,11 @@
 [submodule "micropy-system"]
 	path = micropy-system
 	url = https://github.com/dlbogdan/micropy-system
+[submodule "picosim"]
+	path = picosim
+	url = https://github.com/dlbogdan/picosim.git
+	branch = main
+[submodule "UI-framework"]
+	path = UI-framework
+	url = https://github.com/dlbogdan/UI-framework.git
+	branch = main
