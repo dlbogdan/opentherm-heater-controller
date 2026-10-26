@@ -5,7 +5,7 @@
 	path = picosim
 	url = https://github.com/dlbogdan/picosim.git
 	branch = main
-[submodule "UI-framework"]
-	path = UI-framework
-	url = https://github.com/dlbogdan/UI-framework.git
+[submodule "uifw"]
+	path = uifw
+	url = https://github.com/dlbogdan/uifw.git
 	branch = main
